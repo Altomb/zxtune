@@ -1,3 +1,5 @@
+This repo contains a modified (slopified) version of zxTune.
+
 ZXTune
 =========
 
