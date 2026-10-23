@@ -9,6 +9,9 @@ import android.support.v4.media.session.PlaybackStateCompat
 import android.text.TextUtils
 import android.widget.Toast
 import app.zxtune.Logger
+import app.zxtune.MainService
+import app.zxtune.Releaseable
+import app.zxtune.ReleaseableStub
 import app.zxtune.TimeStamp
 import app.zxtune.Util
 import app.zxtune.core.Identifier
@@ -25,36 +28,76 @@ import app.zxtune.playback.PlaybackControl
 import app.zxtune.playback.PlaybackService
 import app.zxtune.utils.getParcelableCompat
 import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicReference
 
 //! Events gate from local service to mediasession
 internal class StatusCallback private constructor(
-    private val ctx: Context, private val session: MediaSessionCompat
-) : Callback {
-    private val builder = PlaybackStateCompat.Builder()
+    private val ctx: Context,
+    private val ctrl: PlaybackControl,
+    private val session: MediaSessionCompat
+) : Callback,
+    Releaseable {
     private val scope = MainScope()
     private val coverartClient = CoverartProviderClient(ctx)
     private val lockscreenImageUrl = AtomicReference<Uri>()
     private val bitmapLoader by lazy {
         BitmapLoader("lockscreen", ctx, maxSize = 5, maxImageSize = 320)
     }
+    private var subscription: Releaseable = ReleaseableStub
+    private var state = PlaybackControl.State.STOPPED
+    private var position = TimeStamp.EMPTY
+    private var statePublished = false
 
-    init {
-        builder.setActions(
-            PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS or PlaybackStateCompat.ACTION_PLAY_PAUSE or PlaybackStateCompat.ACTION_PLAY or PlaybackStateCompat.ACTION_PAUSE or PlaybackStateCompat.ACTION_STOP or PlaybackStateCompat.ACTION_SKIP_TO_NEXT
-        )
-    }
-
-    override fun onInitialState(state: PlaybackControl.State) =
-        onStateChanged(state, TimeStamp.EMPTY)
+    override fun onInitialState(state: PlaybackControl.State) = onStateChanged(state, TimeStamp.EMPTY)
 
     override fun onStateChanged(state: PlaybackControl.State, pos: TimeStamp) {
-        builder.setState(state.toState(), pos.toMilliseconds(), 1f)
-        session.run {
-            setPlaybackState(builder.build())
-            isActive = state !== PlaybackControl.State.STOPPED
+        this.state = state
+        this.position = pos
+        statePublished = true
+        publishState()
+    }
+
+    private fun publishState() {
+        val playbackState = PlaybackStateCompat.Builder().apply {
+            setActions(ACTIONS)
+            addCustomAction(repeatAction())
+            addCustomAction(shuffleAction())
+            setState(state.toState(), position.toMilliseconds(), 1f)
+        }.build()
+        session.setPlaybackState(playbackState)
+        session.isActive = state !== PlaybackControl.State.STOPPED
+        LOG.d { "published state=$state position=${position.toMilliseconds()} active=${session.isActive}" }
+    }
+
+    // Android Auto draws no standard repeat/shuffle buttons, the state travels as custom
+    // actions whose icons and names must follow the actual modes - so the whole state is
+    // rebuilt on changes
+    private fun repeatAction() = PlaybackStateCompat.CustomAction.Builder(
+        MainService.CUSTOM_ACTION_REPEAT,
+        ctx.getString(repeatLabel(ctrl.trackMode)),
+        repeatIcon(ctrl.trackMode)
+    ).build()
+
+    private fun shuffleAction() = PlaybackStateCompat.CustomAction.Builder(
+        MainService.CUSTOM_ACTION_SHUFFLE,
+        ctx.getString(shuffleLabel(ctrl.sequenceMode)),
+        shuffleIcon(ctrl.sequenceMode)
+    ).build()
+
+    // both indicators describe a single state, so any change updates them together
+    fun publishModes() {
+        session.setShuffleMode(ctrl.sequenceMode.toShuffleMode())
+        session.setRepeatMode(ctrl.toRepeatMode())
+        if (statePublished) {
+            publishState()
         }
+    }
+
+    override fun release() {
+        subscription.release()
+        scope.cancel()
     }
 
     override fun onItemChanged(item: Item) = try {
@@ -151,15 +194,17 @@ internal class StatusCallback private constructor(
     companion object {
         private val LOG = Logger(StatusCallback::class.java.name)
 
+        // repeating is handled by the session callback, but the button is shown by the client
+        // only when the state advertises the corresponding action
+        private val ACTIONS = PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS or PlaybackStateCompat.ACTION_PLAY_PAUSE or PlaybackStateCompat.ACTION_PLAY or PlaybackStateCompat.ACTION_PAUSE or PlaybackStateCompat.ACTION_STOP or PlaybackStateCompat.ACTION_SKIP_TO_NEXT or PlaybackStateCompat.ACTION_SET_REPEAT_MODE or PlaybackStateCompat.ACTION_SET_SHUFFLE_MODE
+
         @JvmStatic
         fun subscribe(
             ctx: Context, svc: PlaybackService, session: MediaSessionCompat
-        ) = svc.subscribe(StatusCallback(ctx, session).also {
-            svc.playbackControl.run {
-                session.setShuffleMode(sequenceMode.toShuffleMode())
-                session.setRepeatMode(trackMode.toRepeatMode())
+        ) = StatusCallback(ctx, svc.playbackControl, session).also {
+            it.publishModes()
+            it.subscription = svc.subscribe(it)
             }
-        })
     }
 }
 

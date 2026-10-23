@@ -307,6 +307,12 @@ MANIFEST_FIXTURE = """\
                 <action android:name="android.intent.action.MAIN" />
             </intent-filter>
         </activity>
+        <!-- the alias name is a component identifier, not a class: it is resolved
+             against targetActivity and never loaded -->
+        <activity-alias
+                android:name="app.zxtune.MainActivityAlias"
+                android:targetActivity="app.zxtune.MainActivity"
+                android:enabled="false" />
         <service android:name="app.zxtune.MainService" />
         <provider android:name="app.zxtune.playlist.Provider" android:authorities="app.zxtune.playlist" />
         <receiver android:name="app.zxtune.device.ui.WidgetHandler" />
@@ -339,7 +345,8 @@ class ManifestRefsTest(unittest.TestCase):
         )
         # permissions, actions, authorities and non-startup meta-data are not classes
         for ignored in ("app.zxtune.PERM", "android.intent.action.MAIN",
-                        "app.zxtune.playlist", "android.appwidget.provider"):
+                        "app.zxtune.playlist", "android.appwidget.provider",
+                        "app.zxtune.MainActivityAlias"):
             self.assertNotIn(ignored, refs)
 
     def test_manifest_namespace_prefix_is_honored(self):
@@ -381,6 +388,32 @@ class ManifestRefsTest(unittest.TestCase):
         body = r8report.render(records, info, set())
         self.assertIn("1 classes the manifest names by string but the output left out:", body)
         self.assertIn("app.zxtune.GoneActivity", body)
+
+    def test_activity_alias_name_is_not_treated_as_a_class(self):
+        # LeakCanary's LeakLauncherActivity alias has no such class; only the
+        # target is loaded reflectively, so the alias name must not go missing
+        tmp = tempfile.mkdtemp()
+        mapping = r8report.parse_mapping(_write(tmp, "mapping.txt", MAPPING))
+        usage = _write(tmp, "usage.txt", USAGE)
+        records = r8report.classify(mapping, usage, "app.zxtune")
+        manifest = _write(tmp, "AndroidManifest.xml", """\
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="app.zxtune">
+    <application android:name="app.zxtune.core.jni.JniGC">
+        <activity-alias
+                android:name="app.zxtune.AliasWithoutClass"
+                android:targetActivity="app.zxtune.core.jni.JniGC" />
+        <activity-alias
+                android:name="app.zxtune.AliasToGoneActivity"
+                android:targetActivity="app.zxtune.GoneActivity" />
+    </application>
+</manifest>
+""")
+        info = r8report.summarize(
+            records, "app.zxtune", "test", "usage", "mapping", mapping, None, manifest
+        )
+        # only the missing target is reported; the alias names are not classes
+        self.assertEqual(["app.zxtune.GoneActivity"], info["missing_manifest"])
 
 
 ROOM_MAPPING = """\

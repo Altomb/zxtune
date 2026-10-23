@@ -35,6 +35,10 @@ public final class AsyncScanner {
     Reply onItem(PlayableItem item);
 
     void onError(Identifier id, Exception e);
+
+        // ! Called when scanning is aborted abnormally, so consumers waiting for items don't block
+        // forever
+        void onScanFailed();
   }
 
   private final ExecutorService executor = Executors.newCachedThreadPool();
@@ -90,6 +94,13 @@ public final class AsyncScanner {
         throw ex;
       }
     }
+
+        final void onScanFailed() {
+            final Callback cb = delegate.get();
+            if (cb != null) {
+                cb.onScanFailed();
+            }
+        }
   }
 
   private void post(Callback callback) {
@@ -98,12 +109,20 @@ public final class AsyncScanner {
       @Override
       public void run() {
         Log.d(TAG, "Worker(%h): started", this);
-        if (scan(cb)) {
+                        boolean finished = false;
+                        try {
+                            finished = scan(cb);
+                        } finally {
+                            if (finished) {
           Log.d(TAG, "Worker(%h): finished", this);
         } else {
+                                // Abnormal exit (exception or Error) never reaches the queue
+                                // limiter; unblock the consumer explicitly
+                                cb.onScanFailed();
           Log.d(TAG, "Worker(%h): dead", this);
         }
       }
+                    }
     });
   }
 

@@ -144,6 +144,7 @@ public class FileIterator implements Iterator {
       private final java.util.Iterator<VfsFile> files;
       private final LinkedBlockingQueue<PlayableItem> itemsQueue;
       private final Exception[] lastError;
+        private boolean finished;
 
       ScannerCallback(java.util.Iterator<VfsFile> files, LinkedBlockingQueue<PlayableItem> itemsQueue,
                       Exception[] lastError) {
@@ -177,6 +178,10 @@ public class FileIterator implements Iterator {
       }
 
       private void finish() {
+            if (finished) {
+                return;
+            }
+            finished = true;
         try {
           itemsQueue.put(PlayableItemStub.instance());
         } catch (InterruptedException e) {
@@ -185,6 +190,13 @@ public class FileIterator implements Iterator {
       }
 
       @Override
+        public void onScanFailed() {
+            // Scanning died without reaching the limiter; put it so takeNextItem doesn't block
+            // forever
+            finish();
+        }
+
+        @Override
       public void onError(Identifier id, Exception e) {
         lastError[0] = e;
       }

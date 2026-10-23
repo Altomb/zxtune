@@ -135,6 +135,10 @@ class SeekControlFragment : Fragment() {
         private fun getNextMode() = when (repeatMode) {
             PlaybackStateCompat.REPEAT_MODE_NONE -> PlaybackStateCompat.REPEAT_MODE_ONE
             PlaybackStateCompat.REPEAT_MODE_ONE -> PlaybackStateCompat.REPEAT_MODE_NONE
+
+            // may be set from a remote client (Android Auto) - the button still turns it off
+            PlaybackStateCompat.REPEAT_MODE_ALL -> PlaybackStateCompat.REPEAT_MODE_NONE
+
             else -> null
         }
     }

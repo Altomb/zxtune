@@ -261,10 +261,13 @@ def parse_seeds(path, prefix):
 # Android manifest elements whose ``android:`` attributes name a class the
 # platform instantiates reflectively; nothing references them statically.
 # ``meta-data`` with value ``androidx.startup`` names an initializer class.
+# ``activity-alias`` only qualifies through ``targetActivity``: the alias's own
+# ``name`` is a component identifier PackageManager resolves to the target and
+# never loads, so it need not exist as a class (LeakCanary ships one).
 _MANIFEST_CLASS_ATTRS = {
     "application": ("name", "appComponentFactory"),
     "activity": ("name",),
-    "activity-alias": ("name", "targetActivity"),
+    "activity-alias": ("targetActivity",),
     "service": ("name",),
     "provider": ("name",),
     "receiver": ("name",),

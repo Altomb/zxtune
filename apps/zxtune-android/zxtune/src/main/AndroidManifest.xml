@@ -21,6 +21,10 @@
     <supports-screens
             android:largeScreens="true"
             android:xlargeScreens="true" />
+    <!-- The app also targets Android Automotive OS: it is not required to run only there -->
+    <uses-feature
+            android:name="android.hardware.type.automotive"
+            android:required="false" />
     <application
             android:name=".MainApplication"
             android:allowBackup="true"
@@ -81,6 +85,12 @@
             <intent-filter>
                 <action android:name="android.media.browse.MediaBrowserService" />
             </intent-filter>
+            <!-- The AAOS media app lists only the media services of the apps which opt in here
+                 or which have no launcher activity of their own. The meta data has to live on
+                 the service itself, the app level one is not visible to the media app. -->
+            <meta-data
+                    android:name="androidx.car.app.launchable"
+                    android:value="true" />
         </service>
         <service
                 android:name=".ScanService"
@@ -153,5 +163,10 @@
                 <action android:name="android.intent.action.MEDIA_BUTTON" />
             </intent-filter>
         </receiver>
+
+        <!-- Enables the Android Auto media browser interface based on MainService -->
+        <meta-data
+                android:name="com.google.android.gms.car.application"
+                android:resource="@xml/automotive_app_desc" />
     </application>
 </manifest>
