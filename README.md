@@ -1,3 +1,5 @@
+This is a sloppy fork of zxtune.
+
 ZXTune
 =========
 
