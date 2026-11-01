@@ -44,6 +44,11 @@
     </plurals>
     <string name="no_tracks_found">No supported tracks found</string>
     <string name="track">Track</string>
+    <!-- media session controls, shown by remote clients (Android Auto) -->
+    <string name="repeat_off">Repeat off</string>
+    <string name="repeat_one">Repeat one</string>
+    <string name="shuffle_off">Shuffle off</string>
+    <string name="shuffle_on">Shuffle on</string>
     <!-- notifications -->
     <string name="notification_channel_name_events">Events</string>
     <string name="notification_channel_name_services">Services</string>

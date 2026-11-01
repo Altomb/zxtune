@@ -50,7 +50,8 @@ android {
 
     signingConfigs {
         release {
-            storeFile file("${treeRoot}/make/android/keystore")
+            // The store is overridable, so a local build may sign with its own keystore
+            storeFile file(localProperties.getProperty('key.store.file', "${treeRoot}/make/android/keystore"))
             storePassword localProperties.getProperty('key.store.password')
             keyAlias 'release'
             keyPassword aliasPassword('release')

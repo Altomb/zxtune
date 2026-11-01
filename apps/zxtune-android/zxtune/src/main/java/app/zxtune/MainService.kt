@@ -11,11 +11,13 @@ import androidx.media.session.MediaButtonReceiver
 import app.zxtune.analytics.Analytics
 import app.zxtune.core.jni.Api
 import app.zxtune.device.media.AudioFocusConnection
+import app.zxtune.device.media.MediaBrowseTree
 import app.zxtune.device.media.MediaSessionControl
 import app.zxtune.device.media.NoisyAudioConnection
 import app.zxtune.device.ui.StatusNotification
 import app.zxtune.device.ui.WidgetHandler
 import app.zxtune.playback.service.PlaybackServiceLocal
+import app.zxtune.playlist.ProviderClient
 import app.zxtune.preferences.Preferences
 import app.zxtune.preferences.Preferences.getDefaultSharedPreferences
 import app.zxtune.preferences.SharedPreferencesBridge.subscribe
@@ -40,8 +42,13 @@ class MainService : MediaBrowserServiceCompat() {
     }
     private var weakDelegate: Delegate? = null
 
+    // Browsable content for clients having no access to the app's UI (Android Auto)
+    private val browseTree by lazy {
+        MediaBrowseTree(this, ProviderClient.create(this))
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        LOG.d { "onStartCommand(${intent})" }
+        LOG.d { "onStartCommand($intent)" }
         when (intent?.action) {
             Intent.ACTION_MEDIA_BUTTON -> MediaButtonReceiver.handleIntent(delegate.session, intent)
         }
@@ -49,20 +56,39 @@ class MainService : MediaBrowserServiceCompat() {
     }
 
     override fun onGetRoot(
-        clientPackageName: String, clientUid: Int, rootHints: Bundle?
+        clientPackageName: String,
+        clientUid: Int,
+        rootHints: Bundle?
     ): BrowserRoot? {
-        LOG.d { "onGetRoot(${clientPackageName})" }
-        return if (clientPackageName == packageName) {
-            delegate // preload
-            BrowserRoot(getString(R.string.app_name), null)
-        } else {
-            null
-        }
+        LOG.d { "onGetRoot($clientPackageName)" }
+        // Preload the playback stack: media clients (Android Auto) may only browse and play,
+        // never touching the app's own UI
+        delegate
+        return BrowserRoot(MediaBrowseTree.ROOT, null)
     }
 
     override fun onLoadChildren(
-        parentId: String, result: Result<List<MediaBrowserCompat.MediaItem>>
-    ) = result.sendError(null)
+        parentId: String,
+        result: Result<List<MediaBrowserCompat.MediaItem>>
+    ) {
+        // Content is resolved asynchronously (playlist provider call)
+        result.detach()
+        scope.launch {
+            val items = runCatching { browseTree.children(parentId) }.getOrElse {
+                LOG.w(it) { "Failed to load children of $parentId" }
+                emptyList()
+            }
+            runCatching { result.sendResult(items) }
+        }
+    }
+
+    override fun onLoadItem(itemId: String, result: Result<MediaBrowserCompat.MediaItem>) {
+        result.detach()
+        scope.launch {
+            val item = runCatching { browseTree.item(itemId) }.getOrNull()
+            runCatching { result.sendResult(item) }
+        }
+    }
 
     override fun onDestroy() {
         weakDelegate?.release()
@@ -76,7 +102,9 @@ class MainService : MediaBrowserServiceCompat() {
     }
 
     private class Delegate(
-        svc: Service, trace: Analytics.BaseTrace, private val scope: CoroutineScope
+        svc: Service,
+        trace: Analytics.BaseTrace,
+        private val scope: CoroutineScope
     ) {
 
         private val resources = ArrayList<Releaseable>()
@@ -116,7 +144,7 @@ class MainService : MediaBrowserServiceCompat() {
             val api = Api.load().await()
             runCatching {
                 LOG.d { "JNI is ready" }
-                val prefs = getDefaultSharedPreferences(ctx);
+                val prefs = getDefaultSharedPreferences(ctx)
                 val options = api.getOptions()
                 addResource(subscribe(prefs, options))
             }.onFailure {
@@ -140,11 +168,14 @@ class MainService : MediaBrowserServiceCompat() {
 
         val CUSTOM_ACTION_ADD_CURRENT = "$TAG.CUSTOM_ACTION_ADD_CURRENT"
         val CUSTOM_ACTION_ADD = "$TAG.CUSTOM_ACTION_ADD"
+
+        // repeat/shuffle have no standard buttons in cars, so they travel as custom actions
+        val CUSTOM_ACTION_REPEAT = "$TAG.CUSTOM_ACTION_REPEAT"
+        val CUSTOM_ACTION_SHUFFLE = "$TAG.CUSTOM_ACTION_SHUFFLE"
         val COMMAND_GET_CURRENT_PARAMETERS = "$TAG.COMMAND_GET_CURRENT_PARAMETERS"
         val COMMAND_SET_CURRENT_PARAMETERS = "$TAG.COMMAND_SET_CURRENT_PARAMETERS"
 
         @JvmStatic
-        fun createIntent(ctx: Context, action: String?) =
-            Intent(ctx, MainService::class.java).setAction(action)
+        fun createIntent(ctx: Context, action: String?) = Intent(ctx, MainService::class.java).setAction(action)
     }
 }

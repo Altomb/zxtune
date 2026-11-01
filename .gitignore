@@ -22,3 +22,9 @@ patches-*
 #variables
 /variables.mak
 local.properties
+
+#local signing keystore
+/make/android/keystore-local
+
+#kotlin compiler session data
+.kotlin/
