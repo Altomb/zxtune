@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:width="32dp"
+    android:height="32dp">
+    <!-- dimmed glyph with a bright slash: cars require a distinct icon per state -->
+    <path
+        android:pathData="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"
+        android:fillColor="#55cfd8dc" />
+    <path
+        android:pathData="M4.95 3.53L20.47 19.05 19.05 20.47 3.53 4.95z"
+        android:fillColor="#cfd8dc" />
+</vector>
