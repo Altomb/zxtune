@@ -1617,6 +1617,18 @@ namespace ZXTune::VGMStream
       "00-57"
       ""sv
     },
+    // vgmstream TXTP
+    {
+      "TXTP" id, "vgmstream TXTP"sv, ".txtp",
+      "'#'v'g'm's't'r'e'a'm't'x't'p"
+      ""sv
+    },
+    // vgmstream TXTH
+    {
+      "TXTH" id, "vgmstream TXTH"sv. ".txth",
+      "'#'v'g'm's't'r'e'a'm't'x't'h"
+      ""sv
+    },
 
     //Unsupported
     // VAS, ~1.1k - no signatures, too few container versions
