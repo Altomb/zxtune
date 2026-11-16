@@ -1619,13 +1619,13 @@ namespace ZXTune::VGMStream
     },
     // vgmstream TXTP
     {
-      "TXTP" id, "vgmstream TXTP"sv, ".txtp",
+      "TXTP"_id, "vgmstream TXTP"sv, ".txtp",
       "'#'v'g'm's't'r'e'a'm't'x't'p"sv,
       PluginType::MULTIFILE
     },
     // vgmstream TXTH
     {
-      "TXTH" id, "vgmstream TXTH"sv. ".txth",
+      "TXTH"_id, "vgmstream TXTH"sv, ".txth",
       "'#'v'g'm's't'r'e'a'm't'x't'h"sv,
       PluginType::MULTIFILE
     },
