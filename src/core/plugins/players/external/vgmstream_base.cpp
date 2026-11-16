@@ -1621,13 +1621,13 @@ namespace ZXTune::VGMStream
     {
       "TXTP" id, "vgmstream TXTP"sv, ".txtp",
       "'#'v'g'm's't'r'e'a'm't'x't'p"sv,
-      PluginType::MULTITRACK
+      PluginType::MULTIFILE
     },
     // vgmstream TXTH
     {
       "TXTH" id, "vgmstream TXTH"sv. ".txth",
       "'#'v'g'm's't'r'e'a'm't'x't'h"sv,
-      PluginType::MULTITRACK
+      PluginType::MULTIFILE
     },
 
     //Unsupported
