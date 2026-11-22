@@ -16,6 +16,7 @@
 #include "module/players/aym/aym_properties_helper.h"
 #include "module/players/properties_meta.h"
 #include "module/players/simple_orderlist.h"
+#include "module/players/track_builder.h"
 
 #include "binary/container.h"
 #include "math/numeric.h"
@@ -30,29 +31,30 @@ namespace Module::ProSoundCreator
   /*
     Do not use GLISS_NOTE command due to possible ambiguation while parsing
   */
-  // supported commands and parameters
+  // per-channel commands and their parameters
+  // Presentation: distinct notation commands get distinct values; don't pack variants.
   enum CmdType
   {
-    // no parameters
-    EMPTY,
-    // r13,period or nothing
+    // type, tone
     ENVELOPE,
     // no parameters
-    NOENVELOPE,
-    // noise base
-    NOISE_BASE,
-    // no params
+    ENVELOPE_ON,
+    // no parameters
+    ENVELOPE_OFF,
+    // no parameters
     BREAK_SAMPLE,
-    // no params
+    // no parameters
     BREAK_ORNAMENT,
-    // no params
+    // no parameters
     NO_ORNAMENT,
-    // absolute gliss
+    // glissade
     GLISS,
     // step
     SLIDE,
     // period, delta
-    VOLUME_SLIDE
+    VOLUME_SLIDE,
+    // value
+    NOISE_BASE
   };
 
   using Formats::Chiptune::ProSoundCreator::Sample;
@@ -215,20 +217,69 @@ namespace Module::ProSoundCreator
 
   using ModuleData = AYM::ModuleData<OrderList, Sample, Ornament>;
 
-  class DataBuilder : public Formats::Chiptune::ProSoundCreator::Builder
+  class DataChannelBuilder : public TrackChannelBuilder<Formats::Chiptune::ProSoundCreator::ChannelBuilder>
+  {
+  public:
+    void SetEnvelope(uint_t type, uint_t value) override
+    {
+      if (type || value)
+      {
+        GetCommands().AddOrUpdate(ENVELOPE, type, value);
+      }
+      else
+      {
+        GetCommands().AddOrReplace(ENVELOPE_ON);
+      }
+    }
+    void SetEnvelope() override
+    {
+      GetCommands().AddOrReplace(ENVELOPE_ON);
+    }
+    void SetNoEnvelope() override
+    {
+      GetCommands().AddOrReplace(ENVELOPE_OFF);
+    }
+    void SetNoiseBase(uint_t val) override
+    {
+      GetCommands().AddOrUpdate(NOISE_BASE, val);
+    }
+    void SetBreakSample() override
+    {
+      GetCommands().AddOrReplace(BREAK_SAMPLE);
+    }
+    void SetBreakOrnament() override
+    {
+      GetCommands().AddOrReplace(BREAK_ORNAMENT);
+    }
+    void SetNoOrnament() override
+    {
+      GetCommands().AddOrReplace(NO_ORNAMENT);
+    }
+    void SetGliss(uint_t absStep) override
+    {
+      GetCommands().AddOrReplace(GLISS, absStep);
+    }
+    void SetSlide(int_t delta) override
+    {
+      GetCommands().AddOrReplace(SLIDE, 0, delta);
+    }
+    void SetVolumeSlide(uint_t period, int_t delta) override
+    {
+      GetCommands().AddOrReplace(VOLUME_SLIDE, period, delta);
+    }
+  };
+
+  using LineBuilder = TrackLineBuilder<Formats::Chiptune::ProSoundCreator::ChannelBuilder, DataChannelBuilder>;
+  using PatternsBuilder = TrackPatternsBuilder<Formats::Chiptune::ProSoundCreator::ChannelBuilder, DataChannelBuilder>;
+
+  class DataBuilder : public TrackDataBuilder<Formats::Chiptune::ProSoundCreator::Builder, ModuleData, PatternsBuilder>
   {
   public:
     explicit DataBuilder(AYM::PropertiesHelper& props)
-      : Properties(props)
-      , Meta(props)
-      , Data(MakeRWPtr<ModuleData>())
+      : TrackDataBuilder(props)
+      , Properties(props)
     {
       Properties.SetFrequencyTable(AYM::TABLE_ASM);
-    }
-
-    Formats::Chiptune::MetaBuilder& GetMetaBuilder() override
-    {
-      return Meta;
     }
 
     void SetInitialTempo(uint_t tempo) override
@@ -251,105 +302,8 @@ namespace Module::ProSoundCreator
       Data->Order = MakePtr<SimpleOrderList>(positions.Loop, std::move(positions.Lines));
     }
 
-    Formats::Chiptune::PatternBuilder& StartPattern(uint_t index) override
-    {
-      Patterns.SetPattern(index);
-      return Patterns;
-    }
-
-    void StartChannel(uint_t index) override
-    {
-      Patterns.SetChannel(index);
-    }
-
-    void SetRest() override
-    {
-      Patterns.GetChannel().SetEnabled(false);
-    }
-
-    void SetNote(uint_t note) override
-    {
-      MutableCell& channel = Patterns.GetChannel();
-      channel.SetEnabled(true);
-      channel.SetNote(note);
-    }
-
-    void SetSample(uint_t sample) override
-    {
-      Patterns.GetChannel().SetSample(sample);
-    }
-
-    void SetOrnament(uint_t ornament) override
-    {
-      Patterns.GetChannel().SetOrnament(ornament);
-    }
-
-    void SetVolume(uint_t vol) override
-    {
-      Patterns.GetChannel().SetVolume(vol);
-    }
-
-    void SetEnvelope(uint_t type, uint_t value) override
-    {
-      Patterns.GetChannel().AddCommand(ENVELOPE, type, value);
-    }
-
-    void SetEnvelope() override
-    {
-      Patterns.GetChannel().AddCommand(ENVELOPE);
-    }
-
-    void SetNoEnvelope() override
-    {
-      Patterns.GetChannel().AddCommand(NOENVELOPE);
-    }
-
-    void SetNoiseBase(uint_t val) override
-    {
-      Patterns.GetChannel().AddCommand(NOISE_BASE, val);
-    }
-
-    void SetBreakSample() override
-    {
-      Patterns.GetChannel().AddCommand(BREAK_SAMPLE);
-    }
-
-    void SetBreakOrnament() override
-    {
-      Patterns.GetChannel().AddCommand(BREAK_ORNAMENT);
-    }
-
-    void SetNoOrnament() override
-    {
-      Patterns.GetChannel().AddCommand(NO_ORNAMENT);
-    }
-
-    void SetGliss(uint_t absStep) override
-    {
-      Patterns.GetChannel().AddCommand(GLISS, absStep);
-    }
-
-    void SetSlide(int_t delta) override
-    {
-      Patterns.GetChannel().AddCommand(SLIDE, delta);
-    }
-
-    void SetVolumeSlide(uint_t period, int_t delta) override
-    {
-      Patterns.GetChannel().AddCommand(VOLUME_SLIDE, period, delta);
-    }
-
-    ModuleData::Ptr CaptureResult()
-    {
-      Data->Patterns = Patterns.CaptureResult();
-      return std::move(Data);
-    }
-
   private:
     AYM::PropertiesHelper& Properties;
-    MetaProperties Meta;
-    PatternsBuilder Patterns;
-    ModuleData::RWPtr Data;
   };
 
   struct ChannelState
@@ -473,17 +427,13 @@ namespace Module::ProSoundCreator
           dst.OrnamentIterator.Disable();
           break;
         case ENVELOPE:
-          if (cmd.Param1 || cmd.Param2)
-          {
-            track.SetEnvelopeType(cmd.Param1);
-            track.SetEnvelopeTone(EnvelopeTone = cmd.Param2);
-          }
-          else
-          {
-            dst.EnvelopeEnabled = true;
-          }
+          track.SetEnvelopeType(cmd.Param1);
+          track.SetEnvelopeTone(EnvelopeTone = static_cast<uint16_t>(cmd.Param2));
           break;
-        case NOENVELOPE:
+        case ENVELOPE_ON:
+          dst.EnvelopeEnabled = true;
+          break;
+        case ENVELOPE_OFF:
           dst.EnvelopeEnabled = false;
           break;
         case NOISE_BASE:
@@ -492,22 +442,23 @@ namespace Module::ProSoundCreator
         case GLISS:
         {
           const int_t sliding = oldTone - track.GetFrequency(dst.Note);
-          const int_t newGliss = sliding >= 0 ? -cmd.Param1 : cmd.Param1;
-          const int_t steps = 0 != cmd.Param1 ? (1 + Math::Absolute(sliding) / cmd.Param1) : 0;
+          const int_t step = cmd.Param1;
+          const int_t newGliss = sliding >= 0 ? -step : step;
+          const int_t steps = 0 != step ? (1 + Math::Absolute(sliding) / step) : 0;
           dst.ToneSlide.SetSliding(sliding);
           dst.ToneSlide.SetGlissade(newGliss);
           dst.ToneSlide.SetSlidingSteps(steps);
         }
         break;
         case SLIDE:
-          dst.ToneSlide.SetGlissade(cmd.Param1);
+          dst.ToneSlide.SetGlissade(cmd.Param2);
           dst.ToneSlide.SetSlidingSteps(0);
           break;
         case VOLUME_SLIDE:
           dst.VolumeSlide.SetParams(cmd.Param1, cmd.Param2);
           break;
         default:
-          assert(!"Invalid command");
+          break;
         }
       }
     }

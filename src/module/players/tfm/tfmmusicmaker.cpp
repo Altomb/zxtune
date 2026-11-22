@@ -16,6 +16,7 @@
 #include "module/players/streaming.h"
 #include "module/players/tfm/tfm_base.h"
 #include "module/players/tfm/tfm_base_track.h"
+#include "module/players/track_builder.h"
 
 #include "binary/container.h"
 #include "math/fixedpoint.h"
@@ -25,51 +26,52 @@
 
 #include <array>
 #include <memory>
+#include <optional>
 
 namespace Module::TFMMusicMaker
 {
+  // Supported commands and their parameters
   enum CmdType
   {
-    EMPTY,
-    // add1, add2
+    // Param1: add1, Param2: add2
     ARPEGGIO,
-    // step
+    // Param2: step
     TONESLIDE,
-    // step
+    // Param1: step
     PORTAMENTO,
-    // speed, depth
+    // Param1: speed, Param2: depth
     VIBRATO,
-    // op, value
+    // Param1: op, Param2: value
     LEVEL,
-    // speedup, speeddown
+    // Param1: speedup, Param2: speeddown
     VOLSLIDE,
-    // on/off
+    // Param1: on/off
     SPECMODE,
-    // op, offset
+    // Param1: op, Param2: offset
     TONEOFFSET,
-    // op, value
+    // Param1: op, Param2: value
     MULTIPLE,
-    // mask
+    // Param1: mask
     MIXING,
-    // val
+    // Param1: value
     PANE,
-    // period
+    // Param1: period
     NOTERETRIG,
-    // pos
+    // Param1: value
     NOTECUT,
-    // pos
+    // Param1: value
     NOTEDELAY,
-    //
+    // no parameters
     DROPEFFECTS,
-    // val
+    // Param1: value
     FEEDBACK,
-    // val
+    // Param1: value
     TEMPO_INTERLEAVE,
-    // even, odd
+    // Param1: even, Param2: odd
     TEMPO_VALUES,
-    //
+    // no parameters
     LOOP_START,
-    // additional count
+    // Param1: additional count
     LOOP_STOP
   };
 
@@ -105,19 +107,117 @@ namespace Module::TFMMusicMaker
     SparsedObjectsStorage<Instrument> Instruments;
   };
 
-  class DataBuilder : public Formats::Chiptune::TFMMusicMaker::Builder
+  class DataChannelBuilder : public TrackChannelBuilder<Formats::Chiptune::TFMMusicMaker::ChannelBuilder>
+  {
+  public:
+    void SetKeyOff() override
+    {
+      GetCell().SetEnabled(false);
+    }
+    void SetNote(uint_t note) override
+    {
+      GetCell().SetNote(note);
+    }
+    void SetVolume(uint_t vol) override
+    {
+      GetCell().SetVolume(vol);
+    }
+    void SetInstrument(uint_t ins) override
+    {
+      GetCell().SetSample(ins);
+    }
+    void SetArpeggio(uint_t add1, uint_t add2) override
+    {
+      GetCommands().AddOrReplace(ARPEGGIO, add1, add2);
+    }
+    void SetSlide(int_t step) override
+    {
+      GetCommands().Add(TONESLIDE, 0, step);
+    }
+    void SetPortamento(int_t step) override
+    {
+      GetCommands().Add(PORTAMENTO, step);
+    }
+    void SetVibrato(uint_t speed, uint_t depth) override
+    {
+      GetCommands().Add(VIBRATO, speed, depth);
+    }
+    void SetTotalLevel(uint_t op, uint_t value) override
+    {
+      GetCommands().Add(LEVEL, op, value);
+    }
+    void SetVolumeSlide(uint_t up, uint_t down) override
+    {
+      GetCommands().Add(VOLSLIDE, up, down);
+    }
+    void SetSpecialMode(bool on) override
+    {
+      GetCommands().AddOrReplace(SPECMODE, on);
+    }
+    void SetToneOffset(uint_t op, uint_t offset) override
+    {
+      GetCommands().Add(TONEOFFSET, op, offset);
+    }
+    void SetMultiple(uint_t op, uint_t val) override
+    {
+      GetCommands().Add(MULTIPLE, op, val);
+    }
+    void SetOperatorsMixing(uint_t mask) override
+    {
+      GetCommands().AddOrReplace(MIXING, mask);
+    }
+    void SetLoopStart() override
+    {
+      GetCommands().Add(LOOP_START);
+    }
+    void SetLoopEnd(uint_t additionalCount) override
+    {
+      GetCommands().Add(LOOP_STOP, additionalCount);
+    }
+    void SetPane(uint_t pane) override
+    {
+      GetCommands().AddOrReplace(PANE, pane);
+    }
+    void SetNoteRetrig(uint_t period) override
+    {
+      GetCommands().AddOrReplace(NOTERETRIG, period);
+    }
+    void SetNoteCut(uint_t quirk) override
+    {
+      GetCommands().AddOrReplace(NOTECUT, quirk);
+    }
+    void SetNoteDelay(uint_t quirk) override
+    {
+      GetCommands().AddOrReplace(NOTEDELAY, quirk);
+    }
+    void SetDropEffects() override
+    {
+      GetCommands().AddOrReplace(DROPEFFECTS);
+    }
+    void SetFeedback(uint_t val) override
+    {
+      GetCommands().AddOrReplace(FEEDBACK, val);
+    }
+    void SetTempoInterleave(uint_t val) override
+    {
+      GetCommands().AddOrReplace(TEMPO_INTERLEAVE, val);
+    }
+    void SetTempoValues(uint_t even, uint_t odd) override
+    {
+      GetCommands().AddOrReplace(TEMPO_VALUES, even, odd);
+    }
+  };
+
+  using LineBuilder = TrackLineBuilder<Formats::Chiptune::TFMMusicMaker::ChannelBuilder, DataChannelBuilder>;
+  using PatternsBuilder = TrackPatternsBuilder<Formats::Chiptune::TFMMusicMaker::ChannelBuilder, DataChannelBuilder>;
+
+  class DataBuilder : public TrackDataBuilder<Formats::Chiptune::TFMMusicMaker::Builder, ModuleData, PatternsBuilder>
   {
   public:
     explicit DataBuilder(PropertiesHelper& props)
-      : Properties(props)
-      , Meta(props)
-      , Data(MakeRWPtr<ModuleData>())
+      : TrackDataBuilder(props)
+      , Properties(props)
     {}
-
-    Formats::Chiptune::MetaBuilder& GetMetaBuilder() override
-    {
-      return Meta;
-    }
 
     void SetTempo(uint_t evenTempo, uint_t oddTempo, uint_t interleavePeriod) override
     {
@@ -140,148 +240,8 @@ namespace Module::TFMMusicMaker
       Data->Order = MakePtr<SimpleOrderList>(positions.Loop, std::move(positions.Lines));
     }
 
-    Formats::Chiptune::PatternBuilder& StartPattern(uint_t index) override
-    {
-      Patterns.SetPattern(index);
-      return Patterns;
-    }
-
-    void StartChannel(uint_t index) override
-    {
-      Patterns.SetChannel(index);
-    }
-
-    void SetKeyOff() override
-    {
-      Patterns.GetChannel().SetEnabled(false);
-    }
-
-    void SetNote(uint_t note) override
-    {
-      Patterns.GetChannel().SetNote(note);
-    }
-
-    void SetVolume(uint_t vol) override
-    {
-      Patterns.GetChannel().SetVolume(vol);
-    }
-
-    void SetInstrument(uint_t ins) override
-    {
-      Patterns.GetChannel().SetSample(ins);
-    }
-
-    void SetArpeggio(uint_t add1, uint_t add2) override
-    {
-      Patterns.GetChannel().AddCommand(ARPEGGIO, add1, add2);
-    }
-
-    void SetSlide(int_t step) override
-    {
-      Patterns.GetChannel().AddCommand(TONESLIDE, step);
-    }
-
-    void SetPortamento(int_t step) override
-    {
-      Patterns.GetChannel().AddCommand(PORTAMENTO, step);
-    }
-
-    void SetVibrato(uint_t speed, uint_t depth) override
-    {
-      Patterns.GetChannel().AddCommand(VIBRATO, speed, depth);
-    }
-
-    void SetTotalLevel(uint_t op, uint_t value) override
-    {
-      Patterns.GetChannel().AddCommand(LEVEL, op, value);
-    }
-
-    void SetVolumeSlide(uint_t up, uint_t down) override
-    {
-      Patterns.GetChannel().AddCommand(VOLSLIDE, up, down);
-    }
-
-    void SetSpecialMode(bool on) override
-    {
-      Patterns.GetChannel().AddCommand(SPECMODE, on);
-    }
-
-    void SetToneOffset(uint_t op, uint_t offset) override
-    {
-      Patterns.GetChannel().AddCommand(TONEOFFSET, op, offset);
-    }
-
-    void SetMultiple(uint_t op, uint_t val) override
-    {
-      Patterns.GetChannel().AddCommand(MULTIPLE, op, val);
-    }
-
-    void SetOperatorsMixing(uint_t mask) override
-    {
-      Patterns.GetChannel().AddCommand(MIXING, mask);
-    }
-
-    void SetLoopStart() override
-    {
-      Patterns.GetChannel().AddCommand(LOOP_START);
-    }
-
-    void SetLoopEnd(uint_t additionalCount) override
-    {
-      Patterns.GetChannel().AddCommand(LOOP_STOP, additionalCount);
-    }
-
-    void SetPane(uint_t pane) override
-    {
-      Patterns.GetChannel().AddCommand(PANE, pane);
-    }
-
-    void SetNoteRetrig(uint_t period) override
-    {
-      Patterns.GetChannel().AddCommand(NOTERETRIG, period);
-    }
-
-    void SetNoteCut(uint_t quirk) override
-    {
-      Patterns.GetChannel().AddCommand(NOTECUT, quirk);
-    }
-
-    void SetNoteDelay(uint_t quirk) override
-    {
-      Patterns.GetChannel().AddCommand(NOTEDELAY, quirk);
-    }
-
-    void SetDropEffects() override
-    {
-      Patterns.GetChannel().AddCommand(DROPEFFECTS);
-    }
-
-    void SetFeedback(uint_t val) override
-    {
-      Patterns.GetChannel().AddCommand(FEEDBACK, val);
-    }
-
-    void SetTempoInterleave(uint_t val) override
-    {
-      Patterns.GetChannel().AddCommand(TEMPO_INTERLEAVE, val);
-    }
-
-    void SetTempoValues(uint_t even, uint_t odd) override
-    {
-      Patterns.GetChannel().AddCommand(TEMPO_VALUES, even, odd);
-    }
-
-    ModuleData::Ptr CaptureResult()
-    {
-      Data->Patterns = Patterns.CaptureResult();
-      return std::move(Data);
-    }
-
   private:
     PropertiesHelper& Properties;
-    MetaProperties Meta;
-    PatternsBuilder Patterns;
-    ModuleData::RWPtr Data;
   };
 
   struct Halftones
@@ -666,7 +626,7 @@ namespace Module::TFMMusicMaker
 
     void GetNewChannelState(const Cell& src, ChannelState& dst, TFM::TrackBuilder& track, TFM::ChannelBuilder channel)
     {
-      const int_t* multiplies[OPERATORS_COUNT] = {nullptr, nullptr, nullptr, nullptr};
+      std::optional<int16_t> multiplies[OPERATORS_COUNT];
       bool dropEffects = false;
       bool hasPortamento = false;
       bool hasOpMixer = false;
@@ -684,7 +644,7 @@ namespace Module::TFMMusicMaker
           State.ToneOffset[cmd.Param1] = cmd.Param2;
           break;
         case MULTIPLE:
-          multiplies[cmd.Param1] = &cmd.Param2;
+          multiplies[cmd.Param1] = cmd.Param2;
           break;
         case MIXING:
           hasOpMixer = true;
@@ -714,6 +674,8 @@ namespace Module::TFMMusicMaker
           break;
         case DROPEFFECTS:
           dropEffects = true;
+          break;
+        default:
           break;
         }
       }
@@ -785,7 +747,7 @@ namespace Module::TFMMusicMaker
           dst.Arpeggio.SetAddons(cmd.Param1, cmd.Param2);
           break;
         case TONESLIDE:
-          dst.ToneSlide.SetDelta(cmd.Param1);
+          dst.ToneSlide.SetDelta(cmd.Param2);
           break;
         case PORTAMENTO:
           dst.Portamento.SetStep(cmd.Param1);
@@ -810,6 +772,8 @@ namespace Module::TFMMusicMaker
           break;
         case FEEDBACK:
           channel.SetupConnection(dst.Algorithm, cmd.Param1);
+          break;
+        default:
           break;
         }
       }
@@ -836,7 +800,8 @@ namespace Module::TFMMusicMaker
       }
     }
 
-    static void LoadInstrument(const int_t* multiplies[], ChannelState& dst, TFM::ChannelBuilder& channel)
+    static void LoadInstrument(const std::optional<int16_t> multiplies[], ChannelState& dst,
+                               TFM::ChannelBuilder& channel)
     {
       const Instrument& ins = *dst.CurInstrument;
       channel.SetupConnection(dst.Algorithm = ins.Algorithm, ins.Feedback);
@@ -1184,7 +1149,6 @@ namespace Module::TFMMusicMaker
 
     void LoadNewLoopTempoParameters(const Cell& chan)
     {
-      // TODO: chan.FindCommand ?
       for (const auto& cmd : chan.GetCommands())
       {
         switch (cmd.Type)
@@ -1201,6 +1165,8 @@ namespace Module::TFMMusicMaker
           break;
         case LOOP_STOP:
           NextLineState = Loop.Stop(cmd.Param1);
+          break;
+        default:
           break;
         }
       }

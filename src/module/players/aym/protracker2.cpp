@@ -16,6 +16,7 @@
 #include "module/players/aym/aym_properties_helper.h"
 #include "module/players/properties_meta.h"
 #include "module/players/simple_orderlist.h"
+#include "module/players/track_builder.h"
 
 #include "binary/container.h"
 #include "parameters/container.h"
@@ -26,22 +27,20 @@
 
 namespace Module::ProTracker2
 {
-  // supported commands and parameters
+  // Supported commands and their parameters
   enum CmdType
   {
-    // no parameters
-    EMPTY,
-    // r13,period
+    // type, tone
     ENVELOPE,
     // no parameters
-    NOENVELOPE,
+    ENVELOPE_OFF,
     // glissade
     GLISS,
-    // glissade,target node
+    // glissade step; target note is stored in the cell
     GLISS_NOTE,
     // no parameters
     NOGLISS,
-    // noise addon
+    // addon; must stay per-channel as the last noise writer applies its own addon
     NOISE_ADD
   };
 
@@ -50,20 +49,46 @@ namespace Module::ProTracker2
 
   using ModuleData = AYM::ModuleData<OrderList, Sample, Ornament>;
 
-  class DataBuilder : public Formats::Chiptune::ProTracker2::Builder
+  class DataChannelBuilder : public TrackChannelBuilder<Formats::Chiptune::ProTracker2::ChannelBuilder>
+  {
+  public:
+    void SetGlissade(int_t val) override
+    {
+      GetCommands().AddOrReplace(GLISS, 0, val);
+    }
+    void SetNoteGliss(int_t val, uint_t /*limit*/) override
+    {
+      GetCommands().AddOrReplace(GLISS_NOTE, 0, val);
+    }
+    void SetNoGliss() override
+    {
+      GetCommands().AddOrReplace(NOGLISS);
+    }
+    void SetEnvelope(uint_t type, uint_t value) override
+    {
+      GetCommands().AddOrReplace(ENVELOPE, type, value);
+    }
+    void SetNoEnvelope() override
+    {
+      GetCommands().AddOrReplace(ENVELOPE_OFF);
+    }
+    void SetNoiseAddon(int_t val) override
+    {
+      GetCommands().AddOrUpdate(NOISE_ADD, 0, val);
+    }
+  };
+
+  using LineBuilder = TrackLineBuilder<Formats::Chiptune::ProTracker2::ChannelBuilder, DataChannelBuilder>;
+  using PatternsBuilder = TrackPatternsBuilder<Formats::Chiptune::ProTracker2::ChannelBuilder, DataChannelBuilder>;
+
+  class DataBuilder : public TrackDataBuilder<Formats::Chiptune::ProTracker2::Builder, ModuleData, PatternsBuilder>
   {
   public:
     explicit DataBuilder(AYM::PropertiesHelper& props)
-      : Properties(props)
-      , Meta(props)
-      , Data(MakeRWPtr<ModuleData>())
+      : TrackDataBuilder(props)
+      , Properties(props)
     {
       Properties.SetFrequencyTable(AYM::TABLE_PROTRACKER2);
-    }
-
-    Formats::Chiptune::MetaBuilder& GetMetaBuilder() override
-    {
-      return Meta;
     }
 
     void SetInitialTempo(uint_t tempo) override
@@ -86,85 +111,8 @@ namespace Module::ProTracker2
       Data->Order = MakePtr<SimpleOrderList>(positions.Loop, std::move(positions.Lines));
     }
 
-    Formats::Chiptune::PatternBuilder& StartPattern(uint_t index) override
-    {
-      Patterns.SetPattern(index);
-      return Patterns;
-    }
-
-    void StartChannel(uint_t index) override
-    {
-      Patterns.SetChannel(index);
-    }
-
-    void SetRest() override
-    {
-      Patterns.GetChannel().SetEnabled(false);
-    }
-
-    void SetNote(uint_t note) override
-    {
-      MutableCell& channel = Patterns.GetChannel();
-      channel.SetEnabled(true);
-      channel.SetNote(note);
-    }
-
-    void SetSample(uint_t sample) override
-    {
-      Patterns.GetChannel().SetSample(sample);
-    }
-
-    void SetOrnament(uint_t ornament) override
-    {
-      Patterns.GetChannel().SetOrnament(ornament);
-    }
-
-    void SetVolume(uint_t vol) override
-    {
-      Patterns.GetChannel().SetVolume(vol);
-    }
-
-    void SetGlissade(int_t val) override
-    {
-      Patterns.GetChannel().AddCommand(GLISS, val);
-    }
-
-    void SetNoteGliss(int_t val, uint_t /*limit*/) override
-    {
-      Patterns.GetChannel().AddCommand(GLISS_NOTE, val);
-    }
-
-    void SetNoGliss() override
-    {
-      Patterns.GetChannel().AddCommand(NOGLISS);
-    }
-
-    void SetEnvelope(uint_t type, uint_t value) override
-    {
-      Patterns.GetChannel().AddCommand(ENVELOPE, type, value);
-    }
-
-    void SetNoEnvelope() override
-    {
-      Patterns.GetChannel().AddCommand(NOENVELOPE);
-    }
-
-    void SetNoiseAddon(int_t val) override
-    {
-      Patterns.GetChannel().AddCommand(NOISE_ADD, val);
-    }
-
-    ModuleData::Ptr CaptureResult()
-    {
-      Data->Patterns = Patterns.CaptureResult();
-      return std::move(Data);
-    }
-
   private:
     AYM::PropertiesHelper& Properties;
-    MetaProperties Meta;
-    PatternsBuilder Patterns;
-    ModuleData::RWPtr Data;
   };
 
   const uint_t LIMITER = ~uint_t(0);
@@ -276,29 +224,29 @@ namespace Module::ProTracker2
         {
         case ENVELOPE:
           track.SetEnvelopeType(cmd.Param1);
-          track.SetEnvelopeTone(cmd.Param2);
+          track.SetEnvelopeTone(static_cast<uint16_t>(cmd.Param2));
           dst.Envelope = true;
           break;
-        case NOENVELOPE:
+        case ENVELOPE_OFF:
           dst.Envelope = false;
           break;
         case NOISE_ADD:
-          dst.NoiseAdd = cmd.Param1;
+          dst.NoiseAdd = cmd.Param2;
           break;
         case GLISS_NOTE:
           dst.Sliding = 0;
-          dst.Glissade = cmd.Param1;
+          dst.Glissade = cmd.Param2;
           dst.SlidingTargetNote = dst.Note;
           break;
         case GLISS:
-          dst.Glissade = cmd.Param1;
+          dst.Glissade = cmd.Param2;
           dst.SlidingTargetNote = LIMITER;
           break;
         case NOGLISS:
           dst.Glissade = 0;
           break;
         default:
-          assert(!"Invalid command");
+          break;
         }
       }
     }

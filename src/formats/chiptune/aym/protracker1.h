@@ -37,6 +37,16 @@ namespace Formats::Chiptune
 
     using Positions = LinesObject<uint_t>;
 
+    class ChannelBuilder : public Formats::Chiptune::ChannelBuilder
+    {
+    public:
+      virtual void SetEnvelope(uint_t type, uint_t value) = 0;
+      virtual void SetNoEnvelope() = 0;
+    };
+
+    using LineBuilder = Tracking<ChannelBuilder>::LineBuilder;
+    using PatternBuilder = Tracking<ChannelBuilder>::PatternBuilder;
+
     class Builder
     {
     public:
@@ -50,17 +60,7 @@ namespace Formats::Chiptune
       virtual void SetOrnament(uint_t index, Ornament ornament) = 0;
       // patterns
       virtual void SetPositions(Positions positions) = 0;
-
       virtual PatternBuilder& StartPattern(uint_t index) = 0;
-
-      virtual void StartChannel(uint_t index) = 0;
-      virtual void SetRest() = 0;
-      virtual void SetNote(uint_t note) = 0;
-      virtual void SetSample(uint_t sample) = 0;
-      virtual void SetOrnament(uint_t ornament) = 0;
-      virtual void SetVolume(uint_t vol) = 0;
-      virtual void SetEnvelope(uint_t type, uint_t value) = 0;
-      virtual void SetNoEnvelope() = 0;
     };
 
     Formats::Chiptune::Container::Ptr Parse(const Binary::Container& data, Builder& target);

@@ -16,6 +16,7 @@
 #include "module/players/saa/saa_base.h"
 #include "module/players/saa/saa_parameters.h"
 #include "module/players/simple_orderlist.h"
+#include "module/players/track_builder.h"
 
 #include "make_ptr.h"
 
@@ -24,13 +25,12 @@
 namespace Module::ETracker
 {
   // supported commands and parameters
+  // Presentation: distinct notation commands get distinct values; don't pack variants.
   enum CmdType
   {
-    // no parameters
-    EMPTY,
-    // yes/no
+    // swap channels (bool)
     SWAPCHANNELS,
-    // tone
+    // value
     ENVELOPE,
     // type
     NOISE
@@ -41,7 +41,7 @@ namespace Module::ETracker
 
   using OrderListWithTransposition = SimpleOrderListWithTransposition<Formats::Chiptune::ETracker::PositionEntry>;
 
-  class ModuleData : public TrackModel
+  class ModuleData : public TrackModelData<OrderListWithTransposition>
   {
   public:
     using Ptr = std::shared_ptr<const ModuleData>;
@@ -54,40 +54,44 @@ namespace Module::ETracker
       return SAA::TRACK_CHANNELS;
     }
 
-    uint_t GetInitialTempo() const override
-    {
-      return InitialTempo;
-    }
-
-    const OrderList& GetOrder() const override
-    {
-      return *Order;
-    }
-
-    const PatternsSet& GetPatterns() const override
-    {
-      return Patterns;
-    }
-
-    uint_t InitialTempo = 0;
-    OrderListWithTransposition::Ptr Order;
-    PatternsSet Patterns;
     SparsedObjectsStorage<Sample> Samples;
     SparsedObjectsStorage<Ornament> Ornaments;
   };
 
-  class DataBuilder : public Formats::Chiptune::ETracker::Builder
+  class DataChannelBuilder : public TrackChannelBuilder<Formats::Chiptune::ETracker::ChannelBuilder>
+  {
+  public:
+    void SetNote(uint_t note) override
+    {
+      GetCell().SetNote(note);
+    }
+    void SetAttenuation(uint_t vol) override
+    {
+      GetCell().SetVolume(15 - vol);
+    }
+    void SetSwapSampleChannels(bool swapChannels) override
+    {
+      GetCommands().AddOrReplace(SWAPCHANNELS, swapChannels);
+    }
+    void SetEnvelope(uint_t value) override
+    {
+      GetCommands().AddOrReplace(ENVELOPE, value);
+    }
+    void SetNoise(uint_t type) override
+    {
+      GetCommands().AddOrReplace(NOISE, type);
+    }
+  };
+
+  using LineBuilder = TrackLineBuilder<Formats::Chiptune::ETracker::ChannelBuilder, DataChannelBuilder>;
+  using PatternsBuilder = TrackPatternsBuilder<Formats::Chiptune::ETracker::ChannelBuilder, DataChannelBuilder>;
+
+  class DataBuilder : public TrackDataBuilder<Formats::Chiptune::ETracker::Builder, ModuleData, PatternsBuilder>
   {
   public:
     explicit DataBuilder(PropertiesHelper& props)
-      : Meta(props)
-      , Data(MakeRWPtr<ModuleData>())
+      : TrackDataBuilder(props)
     {}
-
-    Formats::Chiptune::MetaBuilder& GetMetaBuilder() override
-    {
-      return Meta;
-    }
 
     void SetInitialTempo(uint_t tempo) override
     {
@@ -108,68 +112,6 @@ namespace Module::ETracker
     {
       Data->Order = MakePtr<OrderListWithTransposition>(positions.Loop, std::move(positions.Lines));
     }
-
-    Formats::Chiptune::PatternBuilder& StartPattern(uint_t index) override
-    {
-      Patterns.SetPattern(index);
-      return Patterns;
-    }
-
-    void StartChannel(uint_t index) override
-    {
-      Patterns.SetChannel(index);
-    }
-
-    void SetRest() override
-    {
-      Patterns.GetChannel().SetEnabled(false);
-    }
-
-    void SetNote(uint_t note) override
-    {
-      Patterns.GetChannel().SetNote(note);
-    }
-
-    void SetSample(uint_t sample) override
-    {
-      Patterns.GetChannel().SetSample(sample);
-    }
-
-    void SetOrnament(uint_t ornament) override
-    {
-      Patterns.GetChannel().SetOrnament(ornament);
-    }
-
-    void SetAttenuation(uint_t vol) override
-    {
-      Patterns.GetChannel().SetVolume(15 - vol);
-    }
-
-    void SetSwapSampleChannels(bool swapChannels) override
-    {
-      Patterns.GetChannel().AddCommand(SWAPCHANNELS, swapChannels);
-    }
-
-    void SetEnvelope(uint_t value) override
-    {
-      Patterns.GetChannel().AddCommand(ENVELOPE, value);
-    }
-
-    void SetNoise(uint_t type) override
-    {
-      Patterns.GetChannel().AddCommand(NOISE, type);
-    }
-
-    ModuleData::Ptr CaptureResult()
-    {
-      Data->Patterns = Patterns.CaptureResult();
-      return std::move(Data);
-    }
-
-  private:
-    MetaProperties Meta;
-    PatternsBuilder Patterns;
-    ModuleData::RWPtr Data;
   };
 
   template<class Object>

@@ -2,21 +2,27 @@
  *
  * @file
  *
- * @brief  ASC Sound Master tracks dumper
+ * @brief  SoundTracker tracks dumper
  *
  * @author vitamin.caig@gmail.com
  *
  **/
 
 #include "formats/chiptune/aym/ascsoundmaster.h"
+#include "formats/chiptune/common/builder_meta.h"
+#include "formats/chiptune/common/builder_pattern.h"
 #include "formats/test/utils.h"
 
-#include <iostream>
-#include <string>
+#include "string_view.h"
 
 namespace
 {
   using namespace Formats::Chiptune::ASCSoundMaster;
+
+  auto ToHex(uint_t val)
+  {
+    return val >= 10 ? 'A' + (val - 10) : '0' + val;
+  }
 
   inline std::string GetNote(uint_t note)
   {
@@ -30,24 +36,24 @@ namespace
   class ASCDumpBuilder
     : public Builder
     , public Formats::Chiptune::MetaBuilder
-    , public Formats::Chiptune::PatternBuilder
+    , public Formats::Chiptune::ASCSoundMaster::PatternBuilder
+    , public Formats::Chiptune::ASCSoundMaster::LineBuilder
+    , public Formats::Chiptune::ASCSoundMaster::ChannelBuilder
   {
   public:
-    // Builder
     Formats::Chiptune::MetaBuilder& GetMetaBuilder() override
     {
       return *this;
     }
 
-    // MetaBuilder
     void SetProgram(StringView program) override
     {
       std::cout << "Program: " << program << std::endl;
     }
 
-    void SetTitle(StringView title) override
+    void SetTitle(StringView program) override
     {
-      std::cout << "Title: " << title << std::endl;
+      std::cout << "Title: " << program << std::endl;
     }
 
     void SetAuthor(StringView author) override
@@ -55,23 +61,48 @@ namespace
       std::cout << "Author: " << author << std::endl;
     }
 
-    void SetStrings(const Strings::Array& /*strings*/) override {}
+    void SetStrings(const Strings::Array& /*strings*/) override
+    {
+      std::cout << "Strings: [some]" << std::endl;
+    }
 
     void SetComment(StringView comment) override
     {
       std::cout << "Comment: " << comment << std::endl;
     }
 
-    // Builder
     void SetInitialTempo(uint_t tempo) override
     {
       std::cout << "Tempo: " << tempo << std::endl;
     }
 
-    // Samples and ornaments data is not dumped, only their usage in patterns
-    void SetSample(uint_t /*index*/, Sample /*sample*/) override {}
+    void SetSample(uint_t index, Sample sample) override
+    {
+      std::cout << "[Sample" << ToHex(index)
+                << "]\n"
+                   "Loop: "
+                << sample.Loop << ".." << sample.LoopLimit << '\n';
+      for (const auto& it : sample.Lines)
+      {
+        std::cout << "V=" << ToHex(it.Level) << " T=" << it.ToneDeviation << ' ' << (it.ToneMask ? 'T' : 't')
+                  << (it.NoiseMask ? 'N' : 'n') << (it.EnableEnvelope ? 'E' : ' ') << "A=" << it.Adding
+                  << " dV=" << it.VolSlide << '\n';
+      }
+      std::cout << std::endl;
+    }
 
-    void SetOrnament(uint_t /*index*/, Ornament /*ornament*/) override {}
+    void SetOrnament(uint_t index, Ornament ornament) override
+    {
+      std::cout << "[Ornament" << ToHex(index)
+                << "]\n"
+                   "Loop: "
+                << ornament.Loop << ".." << ornament.LoopLimit << '\n';
+      for (auto it : ornament.Lines)
+      {
+        std::cout << it.NoteAddon << ' ' << it.NoiseAddon << '\n';
+      }
+      std::cout << std::endl;
+    }
 
     void SetPositions(Positions positions) override
     {
@@ -88,119 +119,135 @@ namespace
       std::cout << std::endl;
     }
 
-    Formats::Chiptune::PatternBuilder& StartPattern(uint_t index) override
+    Formats::Chiptune::ASCSoundMaster::PatternBuilder& StartPattern(uint_t index) override
     {
-      std::cout << "\nP" << index;
+      std::cout << std::endl << "[Pattern" << index << ']' << std::endl;
       return *this;
     }
 
-    // PatternBuilder
-    void Finish(uint_t /*size*/) override {}
-
-    void StartLine(uint_t index) override
+    void Finish(uint_t size) override
     {
-      std::cout << "\n\tL" << index;
+      std::cout << Line << std::endl;
+      std::cout << size << " lines" << std::endl;
+      Line.clear();
+    }
+
+    Formats::Chiptune::ASCSoundMaster::LineBuilder& StartLine(uint_t index) override
+    {
+      if (!Line.empty())
+      {
+        std::cout << Line << std::endl;
+      }
+      // nn C-1 SEOVee
+      Line = String(36, ' ');
+      Line[0] = '0' + index / 10;
+      Line[1] = '0' + index % 10;
+      return *this;
     }
 
     void SetTempo(uint_t tempo) override
     {
-      std::cout << "\tTempo: " << tempo;
+      // TODO
     }
 
-    // Builder
-    void StartChannel(uint_t index) override
+    Formats::Chiptune::ASCSoundMaster::ChannelBuilder& StartChannel(uint_t index) override
     {
-      std::cout << "\n\t\tC" << index << ':';
+      ChanPtr = &Line[3 + index * 11];
+      ChanPtr[0] = ChanPtr[1] = ChanPtr[2] = '-';
+      ChanPtr[4] = ChanPtr[5] = ChanPtr[6] = ChanPtr[7] = ChanPtr[8] = ChanPtr[9] = '.';
+      return *this;
     }
 
     void SetRest() override
     {
-      std::cout << "\tRest";
+      ChanPtr[0] = 'R';
+      ChanPtr[1] = '-';
+      ChanPtr[2] = '-';
     }
-
     void SetNote(uint_t note) override
     {
-      std::cout << '\t' << GetNote(note);
+      const std::string str = GetNote(note);
+      ChanPtr[0] = str[0];
+      ChanPtr[1] = str[1];
+      ChanPtr[2] = str[2];
     }
-
     void SetSample(uint_t sample) override
     {
-      std::cout << "\tSmp" << sample;
+      ChanPtr[4] = ToHex(sample);
     }
-
     void SetOrnament(uint_t ornament) override
     {
-      std::cout << "\tOrn" << ornament;
+      ChanPtr[6] = ToHex(ornament);
     }
-
     void SetVolume(uint_t vol) override
     {
-      std::cout << "\tVol" << vol;
+      ChanPtr[7] = ToHex(vol);
     }
 
     void SetEnvelopeType(uint_t type) override
     {
-      std::cout << "\tEnv: " << type;
+      ChanPtr[5] = ToHex(type);
     }
 
-    void SetEnvelopeTone(uint_t tone) override
+    void SetEnvelopeTone(uint_t value) override
     {
-      std::cout << "\tEnvTone: " << tone;
+      ChanPtr[8] = ToHex(value / 16);
+      ChanPtr[9] = ToHex(value % 16);
     }
 
     void SetEnvelope() override
     {
-      std::cout << "\tEnvOn";
+      // TODO
     }
 
     void SetNoEnvelope() override
     {
-      std::cout << "\tNoEnv";
+      ChanPtr[5] = '0';
     }
 
     void SetNoise(uint_t val) override
     {
-      std::cout << "\tNoise: " << val;
+      // TODO
     }
 
     void SetContinueSample() override
     {
-      std::cout << "\tContSmp";
+      // TODO
     }
 
     void SetContinueOrnament() override
     {
-      std::cout << "\tContOrn";
+      // TODO
     }
 
     void SetGlissade(int_t val) override
     {
-      std::cout << "\tGliss: " << val;
+      // TODO
     }
 
-    void SetSlide(int_t steps) override
+    void SetSlide(int_t /*steps*/) override
     {
-      std::cout << "\tSlide: " << steps;
+      // TODO
     }
 
-    void SetNoteSlide(int_t steps, bool useToneSliding) override
+    void SetNoteSlide(int_t /*steps*/, bool /*useToneSliding*/) override
     {
-      std::cout << "\tPorta: " << steps;
-      if (useToneSliding)
-      {
-        std::cout << "(tone)";
-      }
+      // TODO
     }
 
     void SetVolumeSlide(uint_t period, int_t delta) override
     {
-      std::cout << "\tVolSlide: " << period << '/' << delta;
+      // TODO
     }
 
     void SetBreakSample() override
     {
-      std::cout << "\tBreak";
+      // TODO
     }
+
+  private:
+    String Line;
+    char* ChanPtr;
   };
 }  // namespace
 
@@ -223,7 +270,6 @@ int main(int argc, char* argv[])
     {
       Formats::Chiptune::ASCSoundMaster::Ver1::Parse(*data, builder);
     }
-    std::cout << std::endl;
   }
   catch (const std::exception& e)
   {

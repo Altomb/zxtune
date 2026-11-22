@@ -16,6 +16,7 @@
 #include "module/players/aym/aym_properties_helper.h"
 #include "module/players/properties_meta.h"
 #include "module/players/simple_orderlist.h"
+#include "module/players/track_builder.h"
 
 #include "binary/container.h"
 #include "math/numeric.h"
@@ -27,15 +28,13 @@
 
 namespace Module::ProTracker1
 {
-  // supported commands and parameters
+  // Supported commands and their parameters
   enum CmdType
   {
-    // no parameters
-    EMPTY,
-    // r13,period
+    // type, tone
     ENVELOPE,
     // no parameters
-    NOENVELOPE,
+    ENVELOPE_OFF
   };
 
   using Formats::Chiptune::ProTracker1::Sample;
@@ -43,20 +42,30 @@ namespace Module::ProTracker1
 
   using ModuleData = AYM::ModuleData<OrderList, Sample, Ornament>;
 
-  class DataBuilder : public Formats::Chiptune::ProTracker1::Builder
+  class DataChannelBuilder : public TrackChannelBuilder<Formats::Chiptune::ProTracker1::ChannelBuilder>
+  {
+  public:
+    void SetEnvelope(uint_t type, uint_t value) override
+    {
+      GetCommands().AddOrReplace(ENVELOPE, type, value);
+    }
+    void SetNoEnvelope() override
+    {
+      GetCommands().AddOrReplace(ENVELOPE_OFF);
+    }
+  };
+
+  using LineBuilder = TrackLineBuilder<Formats::Chiptune::ProTracker1::ChannelBuilder, DataChannelBuilder>;
+  using PatternsBuilder = TrackPatternsBuilder<Formats::Chiptune::ProTracker1::ChannelBuilder, DataChannelBuilder>;
+
+  class DataBuilder : public TrackDataBuilder<Formats::Chiptune::ProTracker1::Builder, ModuleData, PatternsBuilder>
   {
   public:
     explicit DataBuilder(AYM::PropertiesHelper& props)
-      : Properties(props)
-      , Meta(props)
-      , Data(MakeRWPtr<ModuleData>())
+      : TrackDataBuilder(props)
+      , Properties(props)
     {
       Properties.SetFrequencyTable(AYM::TABLE_PROTRACKER3_ST);
-    }
-
-    Formats::Chiptune::MetaBuilder& GetMetaBuilder() override
-    {
-      return Meta;
     }
 
     void SetInitialTempo(uint_t tempo) override
@@ -79,64 +88,8 @@ namespace Module::ProTracker1
       Data->Order = MakePtr<SimpleOrderList>(positions.Loop, std::move(positions.Lines));
     }
 
-    Formats::Chiptune::PatternBuilder& StartPattern(uint_t index) override
-    {
-      Patterns.SetPattern(index);
-      return Patterns;
-    }
-
-    void StartChannel(uint_t index) override
-    {
-      Patterns.SetChannel(index);
-    }
-
-    void SetRest() override
-    {
-      Patterns.GetChannel().SetEnabled(false);
-    }
-
-    void SetNote(uint_t note) override
-    {
-      Patterns.GetChannel().SetEnabled(true);
-      Patterns.GetChannel().SetNote(note);
-    }
-
-    void SetSample(uint_t sample) override
-    {
-      Patterns.GetChannel().SetSample(sample);
-    }
-
-    void SetOrnament(uint_t ornament) override
-    {
-      Patterns.GetChannel().SetOrnament(ornament);
-    }
-
-    void SetVolume(uint_t vol) override
-    {
-      Patterns.GetChannel().SetVolume(vol);
-    }
-
-    void SetEnvelope(uint_t type, uint_t value) override
-    {
-      Patterns.GetChannel().AddCommand(ENVELOPE, type, value);
-    }
-
-    void SetNoEnvelope() override
-    {
-      Patterns.GetChannel().AddCommand(NOENVELOPE);
-    }
-
-    ModuleData::Ptr CaptureResult()
-    {
-      Data->Patterns = Patterns.CaptureResult();
-      return std::move(Data);
-    }
-
   private:
     AYM::PropertiesHelper& Properties;
-    MetaProperties Meta;
-    PatternsBuilder Patterns;
-    ModuleData::RWPtr Data;
   };
 
   inline uint_t GetVolume(uint_t volume, uint_t level)
@@ -216,14 +169,14 @@ namespace Module::ProTracker1
         {
         case ENVELOPE:
           track.SetEnvelopeType(cmd.Param1);
-          track.SetEnvelopeTone(cmd.Param2);
+          track.SetEnvelopeTone(static_cast<uint16_t>(cmd.Param2));
           dst.Envelope = true;
           break;
-        case NOENVELOPE:
+        case ENVELOPE_OFF:
           dst.Envelope = false;
           break;
         default:
-          assert(!"Invalid command");
+          break;
         }
       }
     }

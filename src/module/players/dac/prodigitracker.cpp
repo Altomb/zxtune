@@ -15,6 +15,7 @@
 #include "module/players/dac/dac_simple.h"
 #include "module/players/properties_meta.h"
 #include "module/players/simple_orderlist.h"
+#include "module/players/track_builder.h"
 #include "module/players/tracking.h"
 
 #include "binary/container.h"
@@ -48,20 +49,22 @@ namespace Module::ProDigiTracker
     SparsedObjectsStorage<Ornament> Ornaments;
   };
 
-  class DataBuilder : public Formats::Chiptune::ProDigiTracker::Builder
+  class DataChannelBuilder : public TrackChannelBuilder<Formats::Chiptune::ProDigiTracker::ChannelBuilder>
+  {
+  public:
+  };
+
+  using LineBuilder = TrackLineBuilder<Formats::Chiptune::ProDigiTracker::ChannelBuilder, DataChannelBuilder>;
+  using PatternsBuilder = TrackPatternsBuilder<Formats::Chiptune::ProDigiTracker::ChannelBuilder, DataChannelBuilder>;
+
+  class DataBuilder : public TrackDataBuilder<Formats::Chiptune::ProDigiTracker::Builder, ModuleData, PatternsBuilder>
   {
   public:
     explicit DataBuilder(DAC::PropertiesHelper& props)
-      : Properties(props)
-      , Meta(props)
-      , Data(MakeRWPtr<ModuleData>())
+      : TrackDataBuilder(props)
+      , Properties(props)
     {
       Properties.SetSamplesFrequency(SAMPLES_FREQ);
-    }
-
-    Formats::Chiptune::MetaBuilder& GetMetaBuilder() override
-    {
-      return Meta;
     }
 
     void SetInitialTempo(uint_t tempo) override
@@ -84,49 +87,8 @@ namespace Module::ProDigiTracker
       Data->Order = MakePtr<SimpleOrderList>(positions.Loop, std::move(positions.Lines));
     }
 
-    Formats::Chiptune::PatternBuilder& StartPattern(uint_t index) override
-    {
-      Patterns.SetPattern(index);
-      return Patterns;
-    }
-
-    void StartChannel(uint_t index) override
-    {
-      Patterns.SetChannel(index);
-    }
-
-    void SetRest() override
-    {
-      Patterns.GetChannel().SetEnabled(false);
-    }
-
-    void SetNote(uint_t note) override
-    {
-      Patterns.GetChannel().SetEnabled(true);
-      Patterns.GetChannel().SetNote(note);
-    }
-
-    void SetSample(uint_t sample) override
-    {
-      Patterns.GetChannel().SetSample(sample);
-    }
-
-    void SetOrnament(uint_t ornament) override
-    {
-      Patterns.GetChannel().SetOrnament(ornament);
-    }
-
-    ModuleData::Ptr CaptureResult()
-    {
-      Data->Patterns = Patterns.CaptureResult();
-      return std::move(Data);
-    }
-
   private:
     DAC::PropertiesHelper& Properties;
-    MetaProperties Meta;
-    PatternsBuilder Patterns;
-    ModuleData::RWPtr Data;
   };
 
   struct OrnamentState
@@ -177,9 +139,9 @@ namespace Module::ProDigiTracker
     {
       for (uint_t chan = 0; chan != CHANNELS_COUNT; ++chan)
       {
-        OrnamentState& ornament = Ornaments[chan];
+        auto& ornament = Ornaments[chan];
         ornament.Update();
-        DAC::ChannelDataBuilder builder = track.GetChannel(chan);
+        auto builder = track.GetChannel(chan);
         builder.SetNoteSlide(ornament.GetOffset());
       }
     }

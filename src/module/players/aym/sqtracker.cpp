@@ -16,6 +16,7 @@
 #include "module/players/aym/aym_properties_helper.h"
 #include "module/players/properties_meta.h"
 #include "module/players/simple_orderlist.h"
+#include "module/players/track_builder.h"
 
 #include "binary/container.h"
 #include "debug/log.h"
@@ -33,21 +34,23 @@ namespace Module::SQTracker
 {
   const Debug::Stream Dbg("Core::SQTSupp");
 
-  // supported commands and parameters
+  // Supported commands and their parameters
   enum CmdType
   {
-    // no parameters
-    EMPTY,
     // value
     TEMPO_ADDON,
-    // r13,period
+    // type, tone
     ENVELOPE,
     // glissade
     GLISS,
-    // value,isGlobal
+    // value
     ATTENUATION,
-    // value,isGlobal
+    // value
+    GLOBAL_ATTENUATION,
+    // value
     ATTENUATION_ADDON,
+    // value
+    GLOBAL_ATTENUATION_ADDON
   };
 
   using Formats::Chiptune::SQTracker::Sample;
@@ -114,6 +117,60 @@ namespace Module::SQTracker
     using StorageType = std::unordered_map<HashedPosition, uint_t, PositionHash>;
     StorageType Storage;
   };
+
+  class DataChannelBuilder : public TrackChannelBuilder<Formats::Chiptune::SQTracker::ChannelBuilder>
+  {
+  public:
+    void SetNote(uint_t note) override
+    {
+      GetCell().SetNote(note);
+    }
+
+    void SetSample(uint_t sample) override
+    {
+      auto& cell = GetCell();
+      cell.SetEnabled(true);
+      cell.SetSample(sample);
+    }
+
+    void SetTempoAddon(uint_t addon) override
+    {
+      GetCommands().Add(TEMPO_ADDON, addon);
+    }
+
+    void SetEnvelope(uint_t type, uint_t value) override
+    {
+      GetCommands().AddOrUpdate(ENVELOPE, type, value);
+    }
+
+    void SetGlissade(int_t val) override
+    {
+      GetCommands().AddOrUpdate(GLISS, 0, val);
+    }
+
+    void SetAttenuation(uint_t att) override
+    {
+      GetCommands().AddOrUpdate(ATTENUATION, att);
+    }
+
+    void SetAttenuationAddon(int_t add) override
+    {
+      GetCommands().AddOrUpdate(ATTENUATION_ADDON, 0, add);
+    }
+
+    void SetGlobalAttenuation(uint_t att) override
+    {
+      GetCommands().AddOrUpdate(GLOBAL_ATTENUATION, att);
+    }
+
+    void SetGlobalAttenuationAddon(int_t add) override
+    {
+      GetCommands().AddOrUpdate(GLOBAL_ATTENUATION_ADDON, 0, add);
+    }
+  };
+
+  using LineBuilder = TrackLineBuilder<Formats::Chiptune::SQTracker::ChannelBuilder, DataChannelBuilder>;
+  using PatternsBuilder = TrackPatternsBuilder<Formats::Chiptune::SQTracker::ChannelBuilder, DataChannelBuilder>;
 
   class ModuleData : public TrackModel
   {
@@ -259,7 +316,7 @@ namespace Module::SQTracker
       {
         if (!CurrentLine)
         {
-          Pattern.SetLine(Row);
+          Pattern.StartLine(Row);
           CurrentLine = &Pattern.GetLine();
         }
         return *CurrentLine;
@@ -300,16 +357,16 @@ namespace Module::SQTracker
         const MultiLine inLine = inPattern.GetLine(row);
         if (inLine.HasData())
         {
-          MutableLine& outLine = outPattern.GetLine();
-          ConvertLine(inLine, patAttrs, tempo, outLine);
+          auto& outLine = outPattern.GetLine();
+          ConvertLine(inLine, patAttrs, tempo, builder.GetCommandsPool(), outLine);
         }
         outPattern.SetTempo(tempo);
       }
-      builder.FinishPattern(maxLines);
+      builder.Finish(maxLines);
     }
 
     static void ConvertLine(const MultiLine& inLine, const Formats::Chiptune::SQTracker::PositionEntry& patAttrs,
-                            uint_t& tempo, MutableLine& outLine)
+                            uint_t& tempo, MutableCommandsPool& commandsPool, MutableLine& outLine)
     {
       for (uint_t idx = 0; idx != patAttrs.Channels.size(); ++idx)
       {
@@ -323,7 +380,8 @@ namespace Module::SQTracker
           }
           if (const auto* const inCell = line->GetChannel(0))
           {
-            MutableCell& outCell = outLine.AddChannel(chan);
+            auto& outCell = outLine.AddChannel(chan);
+            outCell.SetCommandsPool(&commandsPool);
             if (const uint_t tempoAddon = ConvertChannel(*inCell, enabledEffects, outCell))
             {
               tempo = (tempo + tempoAddon) & 31;
@@ -363,14 +421,16 @@ namespace Module::SQTracker
           }
           break;
         case ATTENUATION:
+        case GLOBAL_ATTENUATION:
         case ATTENUATION_ADDON:
+        case GLOBAL_ATTENUATION_ADDON:
           if (!effectsEnabled)
           {
             break;
           }
           [[fallthrough]];
         default:
-          dst.AddCommand(cmd.Type, cmd.Param1, cmd.Param2, cmd.Param3);
+          dst.GetCommands().Add(static_cast<CmdType>(cmd.Type), cmd.Param1, cmd.Param2);
           break;
         }
       }
@@ -382,30 +442,14 @@ namespace Module::SQTracker
     mutable std::optional<PatternsSet> FlatPatterns;
   };
 
-  class SingleChannelPatternsBuilder : public PatternsBuilder
-  {
-  public:
-    void StartLine(uint_t index) override
-    {
-      PatternsBuilder::StartLine(index);
-      SetChannel(0);
-    }
-  };
-
-  class DataBuilder : public Formats::Chiptune::SQTracker::Builder
+  class DataBuilder : public TrackDataBuilder<Formats::Chiptune::SQTracker::Builder, ModuleData, PatternsBuilder>
   {
   public:
     explicit DataBuilder(AYM::PropertiesHelper& props)
-      : Properties(props)
-      , Meta(props)
-      , Data(MakeRWPtr<ModuleData>())
+      : TrackDataBuilder(props)
+      , Properties(props)
     {
       Properties.SetFrequencyTable(AYM::TABLE_SQTRACKER);
-    }
-
-    Formats::Chiptune::MetaBuilder& GetMetaBuilder() override
-    {
-      return Meta;
     }
 
     void SetSample(uint_t index, Formats::Chiptune::SQTracker::Sample sample) override
@@ -423,69 +467,6 @@ namespace Module::SQTracker
       Data->Positions = std::move(positions);
     }
 
-    Formats::Chiptune::PatternBuilder& StartPattern(uint_t index) override
-    {
-      Patterns.SetPattern(index);
-      return Patterns;
-    }
-
-    void SetTempoAddon(uint_t addon) override
-    {
-      Patterns.GetChannel().AddCommand(TEMPO_ADDON, addon);
-    }
-
-    void SetRest() override
-    {
-      Patterns.GetChannel().SetEnabled(false);
-    }
-
-    void SetNote(uint_t note) override
-    {
-      MutableCell& channel = Patterns.GetChannel();
-      channel.SetNote(note);
-    }
-
-    void SetSample(uint_t sample) override
-    {
-      Patterns.GetChannel().SetEnabled(true);
-      Patterns.GetChannel().SetSample(sample);
-    }
-
-    void SetOrnament(uint_t ornament) override
-    {
-      Patterns.GetChannel().SetOrnament(ornament);
-    }
-
-    void SetEnvelope(uint_t type, uint_t value) override
-    {
-      Patterns.GetChannel().AddCommand(ENVELOPE, type, value);
-    }
-
-    void SetGlissade(int_t val) override
-    {
-      Patterns.GetChannel().AddCommand(GLISS, val);
-    }
-
-    void SetAttenuation(uint_t att) override
-    {
-      Patterns.GetChannel().AddCommand(ATTENUATION, att);
-    }
-
-    void SetAttenuationAddon(int_t add) override
-    {
-      Patterns.GetChannel().AddCommand(ATTENUATION_ADDON, add);
-    }
-
-    void SetGlobalAttenuation(uint_t att) override
-    {
-      Patterns.GetChannel().AddCommand(ATTENUATION, att, true);
-    }
-
-    void SetGlobalAttenuationAddon(int_t add) override
-    {
-      Patterns.GetChannel().AddCommand(ATTENUATION_ADDON, add, true);
-    }
-
     ModuleData::Ptr CaptureResult()
     {
       Data->RawPatterns = Patterns.CaptureResult();
@@ -494,10 +475,7 @@ namespace Module::SQTracker
 
   private:
     AYM::PropertiesHelper& Properties;
-    MetaProperties Meta;
-    SingleChannelPatternsBuilder Patterns;
     std::vector<Formats::Chiptune::SQTracker::PositionEntry> Positions;
-    ModuleData::RWPtr Data;
   };
 
   struct ChannelState
@@ -613,36 +591,29 @@ namespace Module::SQTracker
           dst.Envelope = true;
           break;
         case GLISS:
-          dst.Glissade = cmd.Param1;
+          dst.Glissade = cmd.Param2;
           dst.Sliding = 0;
           break;
         case ATTENUATION:
-          // global
-          if (cmd.Param2)
+          dst.Attenuation = cmd.Param1;
+          break;
+        case GLOBAL_ATTENUATION:
+          for (auto& chan : PlayerState)
           {
-            for (auto& chan : PlayerState)
-            {
-              chan.Attenuation = cmd.Param1;
-            }
-          }
-          else
-          {
-            dst.Attenuation = cmd.Param1;
+            chan.Attenuation = cmd.Param1;
           }
           break;
         case ATTENUATION_ADDON:
-          // global
-          if (cmd.Param2)
+          dst.AddAttenuation(cmd.Param2);
+          break;
+        case GLOBAL_ATTENUATION_ADDON:
+          for (auto& chan : PlayerState)
           {
-            for (auto& chan : PlayerState)
-            {
-              chan.AddAttenuation(cmd.Param1);
-            }
+            chan.AddAttenuation(cmd.Param2);
           }
-          else
-          {
-            dst.AddAttenuation(cmd.Param1);
-          }
+          break;
+        default:
+          break;
         }
       }
     }

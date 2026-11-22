@@ -15,6 +15,7 @@
 #include "module/players/dac/dac_simple.h"
 #include "module/players/properties_meta.h"
 #include "module/players/simple_orderlist.h"
+#include "module/players/track_builder.h"
 #include "module/players/tracking.h"
 
 #include "binary/container.h"
@@ -43,9 +44,10 @@ namespace Module::ChipTracker
     return step * 3270 / int_t(C_1_STEP * 100);
   }
 
+  // per-channel commands and their parameters
+  // Presentation: distinct notation commands get distinct values; don't pack variants.
   enum CmdType
   {
-    EMPTY,
     // offset in bytes
     SAMPLE_OFFSET,
     // step
@@ -54,20 +56,30 @@ namespace Module::ChipTracker
 
   using ModuleData = DAC::SimpleModuleData;
 
-  class DataBuilder : public Formats::Chiptune::ChipTracker::Builder
+  class DataChannelBuilder : public TrackChannelBuilder<Formats::Chiptune::ChipTracker::ChannelBuilder>
+  {
+  public:
+    void SetSlide(int_t step) override
+    {
+      GetCommands().AddOrUpdate(SLIDE, 0, step);
+    }
+    void SetSampleOffset(uint_t offset) override
+    {
+      GetCommands().AddOrUpdate(SAMPLE_OFFSET, 0, offset);
+    }
+  };
+
+  using LineBuilder = TrackLineBuilder<Formats::Chiptune::ChipTracker::ChannelBuilder, DataChannelBuilder>;
+  using PatternsBuilder = TrackPatternsBuilder<Formats::Chiptune::ChipTracker::ChannelBuilder, DataChannelBuilder>;
+
+  class DataBuilder : public TrackDataBuilder<Formats::Chiptune::ChipTracker::Builder, ModuleData, PatternsBuilder>
   {
   public:
     explicit DataBuilder(DAC::PropertiesHelper& props)
-      : Properties(props)
-      , Meta(props)
-      , Data(MakeRWPtr<ModuleData>(CHANNELS_COUNT))
+      : TrackDataBuilder(props, MakeRWPtr<ModuleData>(CHANNELS_COUNT))
+      , Properties(props)
     {
       Properties.SetSamplesFrequency(SAMPLES_FREQ);
-    }
-
-    Formats::Chiptune::MetaBuilder& GetMetaBuilder() override
-    {
-      return Meta;
     }
 
     virtual void SetVersion(uint_t major, uint_t minor)
@@ -90,54 +102,8 @@ namespace Module::ChipTracker
       Data->Order = MakePtr<SimpleOrderList>(positions.Loop, std::move(positions.Lines));
     }
 
-    Formats::Chiptune::PatternBuilder& StartPattern(uint_t index) override
-    {
-      Patterns.SetPattern(index);
-      return Patterns;
-    }
-
-    void StartChannel(uint_t index) override
-    {
-      Patterns.SetChannel(index);
-    }
-
-    void SetRest() override
-    {
-      Patterns.GetChannel().SetEnabled(false);
-    }
-
-    void SetNote(uint_t note) override
-    {
-      Patterns.GetChannel().SetEnabled(true);
-      Patterns.GetChannel().SetNote(note);
-    }
-
-    void SetSample(uint_t sample) override
-    {
-      Patterns.GetChannel().SetSample(sample);
-    }
-
-    void SetSlide(int_t step) override
-    {
-      Patterns.GetChannel().AddCommand(SLIDE, step);
-    }
-
-    void SetSampleOffset(uint_t offset) override
-    {
-      Patterns.GetChannel().AddCommand(SAMPLE_OFFSET, offset);
-    }
-
-    ModuleData::Ptr CaptureResult()
-    {
-      Data->Patterns = Patterns.CaptureResult();
-      return std::move(Data);
-    }
-
   private:
     DAC::PropertiesHelper& Properties;
-    MetaProperties Meta;
-    PatternsBuilder Patterns;
-    ModuleData::RWPtr Data;
   };
 
   struct GlissData
@@ -186,10 +152,10 @@ namespace Module::ChipTracker
     {
       for (uint_t chan = 0; chan != CHANNELS_COUNT; ++chan)
       {
-        GlissData& gliss(Gliss[chan]);
+        auto& gliss = Gliss[chan];
         if (gliss.Update())
         {
-          DAC::ChannelDataBuilder builder = track.GetChannel(chan);
+          auto builder = track.GetChannel(chan);
           builder.SetFreqSlideHz(StepToHz(gliss.Sliding));
         }
       }
@@ -232,10 +198,10 @@ namespace Module::ChipTracker
         switch (cmd.Type)
         {
         case SAMPLE_OFFSET:
-          builder.SetPosInSample(cmd.Param1);
+          builder.SetPosInSample(cmd.Param2);
           break;
         case SLIDE:
-          gliss.Glissade = cmd.Param1;
+          gliss.Glissade = cmd.Param2;
           break;
         default:
           assert(!"Invalid command");

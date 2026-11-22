@@ -15,6 +15,7 @@
 #include "module/players/dac/dac_simple.h"
 #include "module/players/properties_meta.h"
 #include "module/players/simple_orderlist.h"
+#include "module/players/track_builder.h"
 #include "module/players/tracking.h"
 
 #include "binary/container.h"
@@ -30,13 +31,12 @@ namespace Module::ExtremeTracker1
 
   const uint_t C_1_STEP_GLISS = 0x50;
 
-  // supported tracking commands
+  // per-channel commands and their parameters
+  // Presentation: distinct notation commands get distinct values; don't pack variants.
   enum CmdType
   {
-    // no parameters
-    EMPTY,
-    // 1 param
-    GLISS,
+    // glissade
+    GLISS
   };
 
   inline int_t StepToHz(int_t step)
@@ -48,19 +48,25 @@ namespace Module::ExtremeTracker1
 
   using ModuleData = DAC::SimpleModuleData;
 
-  class DataBuilder : public Formats::Chiptune::ExtremeTracker1::Builder
+  class DataChannelBuilder : public TrackChannelBuilder<Formats::Chiptune::ExtremeTracker1::ChannelBuilder>
+  {
+  public:
+    void SetGliss(int_t gliss) override
+    {
+      GetCommands().AddOrUpdate(GLISS, 0, gliss);
+    }
+  };
+
+  using LineBuilder = TrackLineBuilder<Formats::Chiptune::ExtremeTracker1::ChannelBuilder, DataChannelBuilder>;
+  using PatternsBuilder = TrackPatternsBuilder<Formats::Chiptune::ExtremeTracker1::ChannelBuilder, DataChannelBuilder>;
+
+  class DataBuilder : public TrackDataBuilder<Formats::Chiptune::ExtremeTracker1::Builder, ModuleData, PatternsBuilder>
   {
   public:
     explicit DataBuilder(DAC::PropertiesHelper& props)
-      : Properties(props)
-      , Meta(props)
-      , Data(MakeRWPtr<ModuleData>(CHANNELS_COUNT))
+      : TrackDataBuilder(props, MakeRWPtr<ModuleData>(CHANNELS_COUNT))
+      , Properties(props)
     {}
-
-    Formats::Chiptune::MetaBuilder& GetMetaBuilder() override
-    {
-      return Meta;
-    }
 
     void SetInitialTempo(uint_t tempo) override
     {
@@ -82,54 +88,8 @@ namespace Module::ExtremeTracker1
       Data->Order = MakePtr<SimpleOrderList>(positions.Loop, std::move(positions.Lines));
     }
 
-    Formats::Chiptune::PatternBuilder& StartPattern(uint_t index) override
-    {
-      Patterns.SetPattern(index);
-      return Patterns;
-    }
-
-    void StartChannel(uint_t index) override
-    {
-      Patterns.SetChannel(index);
-    }
-
-    void SetRest() override
-    {
-      Patterns.GetChannel().SetEnabled(false);
-    }
-
-    void SetNote(uint_t note) override
-    {
-      Patterns.GetChannel().SetEnabled(true);
-      Patterns.GetChannel().SetNote(note);
-    }
-
-    void SetSample(uint_t sample) override
-    {
-      Patterns.GetChannel().SetSample(sample);
-    }
-
-    void SetVolume(uint_t volume) override
-    {
-      Patterns.GetChannel().SetVolume(volume);
-    }
-
-    void SetGliss(int_t gliss) override
-    {
-      Patterns.GetChannel().AddCommand(GLISS, gliss);
-    }
-
-    ModuleData::Ptr CaptureResult()
-    {
-      Data->Patterns = Patterns.CaptureResult();
-      return std::move(Data);
-    }
-
   private:
     DAC::PropertiesHelper& Properties;
-    MetaProperties Meta;
-    PatternsBuilder Patterns;
-    ModuleData::RWPtr Data;
   };
 
   struct GlissData
@@ -178,10 +138,10 @@ namespace Module::ExtremeTracker1
     {
       for (uint_t chan = 0; chan != CHANNELS_COUNT; ++chan)
       {
-        GlissData& gliss(Gliss[chan]);
+        auto& gliss = Gliss[chan];
         if (gliss.Update())
         {
-          DAC::ChannelDataBuilder builder = track.GetChannel(chan);
+          auto builder = track.GetChannel(chan);
           builder.SetFreqSlideHz(StepToHz(gliss.Sliding));
         }
       }
@@ -231,7 +191,7 @@ namespace Module::ExtremeTracker1
         switch (cmd.Type)
         {
         case GLISS:
-          gliss.Glissade = cmd.Param1;
+          gliss.Glissade = cmd.Param2;
           break;
         default:
           assert(!"Invalid command");

@@ -15,6 +15,7 @@
 #include "module/players/aym/aym_properties_helper.h"
 #include "module/players/properties_meta.h"
 #include "module/players/simple_orderlist.h"
+#include "module/players/track_builder.h"
 
 #include "binary/container.h"
 #include "parameters/container.h"
@@ -25,12 +26,15 @@
 
 namespace Module::SoundTrackerPro
 {
+  // Supported commands and their parameters
   enum CmdType
   {
-    EMPTY,
-    ENVELOPE,    // 2p
-    NOENVELOPE,  // 0p
-    GLISS,       // 1p
+    // type, tone
+    ENVELOPE,
+    // ornament number
+    ORNAMENT,
+    // glissade
+    GLISS
   };
 
   using Formats::Chiptune::SoundTrackerPro::Sample;
@@ -41,20 +45,38 @@ namespace Module::SoundTrackerPro
 
   using ModuleData = AYM::ModuleData<OrderListWithTransposition, Sample, Ornament>;
 
-  class DataBuilder : public Formats::Chiptune::SoundTrackerPro::Builder
+  class DataChannelBuilder : public TrackChannelBuilder<Formats::Chiptune::SoundTrackerPro::ChannelBuilder>
+  {
+  public:
+    void SetOrnament(uint_t ornament) override
+    {
+      auto& chan = GetCell();
+      // Keep the cell field for the generic representation, but also emit an
+      // ordered command so playback can reproduce the native state machine.
+      chan.SetOrnament(ornament);
+      chan.GetCommands().AddOrReplace(ORNAMENT, ornament);
+    }
+    void SetEnvelope(uint_t type, uint_t value) override
+    {
+      GetCommands().AddOrReplace(ENVELOPE, type, value);
+    }
+    void SetGliss(int_t step) override
+    {
+      GetCommands().AddOrReplace(GLISS, 0, step);
+    }
+  };
+
+  using LineBuilder = TrackLineBuilder<Formats::Chiptune::SoundTrackerPro::ChannelBuilder, DataChannelBuilder>;
+  using PatternsBuilder = TrackPatternsBuilder<Formats::Chiptune::SoundTrackerPro::ChannelBuilder, DataChannelBuilder>;
+
+  class DataBuilder : public TrackDataBuilder<Formats::Chiptune::SoundTrackerPro::Builder, ModuleData, PatternsBuilder>
   {
   public:
     explicit DataBuilder(AYM::PropertiesHelper& props)
-      : Properties(props)
-      , Meta(props)
-      , Data(MakeRWPtr<ModuleData>())
+      : TrackDataBuilder(props)
+      , Properties(props)
     {
       Properties.SetFrequencyTable(AYM::TABLE_SOUNDTRACKER_PRO);
-    }
-
-    Formats::Chiptune::MetaBuilder& GetMetaBuilder() override
-    {
-      return Meta;
     }
 
     void SetInitialTempo(uint_t tempo) override
@@ -77,69 +99,8 @@ namespace Module::SoundTrackerPro
       Data->Order = MakePtr<OrderListWithTransposition>(positions.Loop, std::move(positions.Lines));
     }
 
-    Formats::Chiptune::PatternBuilder& StartPattern(uint_t index) override
-    {
-      Patterns.SetPattern(index);
-      return Patterns;
-    }
-
-    void StartChannel(uint_t index) override
-    {
-      Patterns.SetChannel(index);
-    }
-
-    void SetRest() override
-    {
-      Patterns.GetChannel().SetEnabled(false);
-    }
-
-    void SetNote(uint_t note) override
-    {
-      Patterns.GetChannel().SetEnabled(true);
-      Patterns.GetChannel().SetNote(note);
-    }
-
-    void SetSample(uint_t sample) override
-    {
-      Patterns.GetChannel().SetSample(sample);
-    }
-
-    void SetOrnament(uint_t ornament) override
-    {
-      Patterns.GetChannel().SetOrnament(ornament);
-    }
-
-    void SetEnvelope(uint_t type, uint_t value) override
-    {
-      Patterns.GetChannel().AddCommand(ENVELOPE, type, value);
-    }
-
-    void SetNoEnvelope() override
-    {
-      Patterns.GetChannel().AddCommand(NOENVELOPE);
-    }
-
-    void SetGliss(uint_t target) override
-    {
-      Patterns.GetChannel().AddCommand(GLISS, target);
-    }
-
-    void SetVolume(uint_t vol) override
-    {
-      Patterns.GetChannel().SetVolume(vol);
-    }
-
-    ModuleData::Ptr CaptureResult()
-    {
-      Data->Patterns = Patterns.CaptureResult();
-      return std::move(Data);
-    }
-
   private:
     AYM::PropertiesHelper& Properties;
-    MetaProperties Meta;
-    PatternsBuilder Patterns;
-    ModuleData::RWPtr Data;
   };
 
   struct ChannelState
@@ -195,8 +156,6 @@ namespace Module::SoundTrackerPro
       if (const bool* enabled = src.GetEnabled())
       {
         dst.Enabled = *enabled;
-        dst.PosInSample = 0;
-        dst.PosInOrnament = 0;
       }
       if (const uint_t* note = src.GetNote())
       {
@@ -208,12 +167,6 @@ namespace Module::SoundTrackerPro
       if (const uint_t* sample = src.GetSample())
       {
         dst.SampleNum = *sample;
-        dst.PosInSample = 0;
-      }
-      if (const uint_t* ornament = src.GetOrnament())
-      {
-        dst.OrnamentNum = *ornament;
-        dst.PosInOrnament = 0;
       }
       if (const uint_t* volume = src.GetVolume())
       {
@@ -230,15 +183,19 @@ namespace Module::SoundTrackerPro
             track.SetEnvelopeTone(cmd.Param2);
           }
           dst.Envelope = true;
+          dst.Glissade = 0;
+          dst.PosInOrnament = 0;
           break;
-        case NOENVELOPE:
+        case ORNAMENT:
           dst.Envelope = false;
+          dst.Glissade = 0;
+          dst.OrnamentNum = cmd.Param1;
           break;
         case GLISS:
-          dst.Glissade = cmd.Param1;
+          dst.Glissade = cmd.Param2;
           break;
         default:
-          assert(!"Invalid command");
+          break;
         }
       }
     }
@@ -295,7 +252,10 @@ namespace Module::SoundTrackerPro
         channel.DisableNoise();
       }
 
-      if (++dst.PosInOrnament >= curOrnament.GetSize())
+      // The native player freezes the ornament position while the envelope is
+      // enabled (it sets the ornament length to 1), so it stays wherever the
+      // envelope left it.
+      if (!dst.Envelope && ++dst.PosInOrnament >= curOrnament.GetSize())
       {
         dst.PosInOrnament = curOrnament.GetLoop();
       }

@@ -15,10 +15,13 @@
 #include "module/players/dac/dac_simple.h"
 #include "module/players/properties_meta.h"
 #include "module/players/simple_orderlist.h"
+#include "module/players/track_builder.h"
 #include "module/players/tracking.h"
 
 #include "binary/container.h"
 #include "parameters/container.h"
+
+#include "make_ptr.h"
 
 #include <array>
 
@@ -31,33 +34,44 @@ namespace Module::SQDigitalTracker
   const uint_t C_1_STEP = 44;
   const uint_t SAMPLES_FREQ = Z80_FREQ * C_1_STEP / TICKS_PER_CYCLE / 256;
 
-  // supported tracking commands
+  // per-channel commands and their parameters
+  // Presentation: distinct notation commands get distinct values; don't pack variants.
   enum CmdType
   {
-    // no parameters
-    EMPTY,
-    // 1 param
+    // period
     VOLUME_SLIDE_PERIOD,
-    // 1 param
-    VOLUME_SLIDE,
+    // direction
+    VOLUME_SLIDE
   };
 
   using ModuleData = DAC::SimpleModuleData;
 
-  class DataBuilder : public Formats::Chiptune::SQDigitalTracker::Builder
+  class DataChannelBuilder : public TrackChannelBuilder<Formats::Chiptune::SQDigitalTracker::ChannelBuilder>
+  {
+  public:
+    void SetVolume(uint_t volume, int_t slideDirection) override
+    {
+      auto& chan = GetCell();
+      chan.SetVolume(volume);
+      chan.GetCommands().AddOrUpdate(VOLUME_SLIDE, 0, slideDirection);
+    }
+    void SetVolumeSlidePeriod(uint_t period) override
+    {
+      GetCommands().AddOrUpdate(VOLUME_SLIDE_PERIOD, period);
+    }
+  };
+
+  using LineBuilder = TrackLineBuilder<Formats::Chiptune::SQDigitalTracker::ChannelBuilder, DataChannelBuilder>;
+  using PatternsBuilder = TrackPatternsBuilder<Formats::Chiptune::SQDigitalTracker::ChannelBuilder, DataChannelBuilder>;
+
+  class DataBuilder : public TrackDataBuilder<Formats::Chiptune::SQDigitalTracker::Builder, ModuleData, PatternsBuilder>
   {
   public:
     explicit DataBuilder(DAC::PropertiesHelper& props)
-      : Properties(props)
-      , Meta(props)
-      , Data(MakeRWPtr<ModuleData>(CHANNELS_COUNT))
+      : TrackDataBuilder(props, MakeRWPtr<ModuleData>(CHANNELS_COUNT))
+      , Properties(props)
     {
       Properties.SetSamplesFrequency(SAMPLES_FREQ);
-    }
-
-    Formats::Chiptune::MetaBuilder& GetMetaBuilder() override
-    {
-      return Meta;
     }
 
     void SetInitialTempo(uint_t tempo) override
@@ -75,59 +89,8 @@ namespace Module::SQDigitalTracker
       Data->Order = MakePtr<SimpleOrderList>(positions.Loop, std::move(positions.Lines));
     }
 
-    Formats::Chiptune::PatternBuilder& StartPattern(uint_t index) override
-    {
-      Patterns.SetPattern(index);
-      return Patterns;
-    }
-
-    void StartChannel(uint_t index) override
-    {
-      Patterns.SetChannel(index);
-    }
-
-    void SetRest() override
-    {
-      Patterns.GetChannel().SetEnabled(false);
-    }
-
-    void SetNote(uint_t note) override
-    {
-      Patterns.GetChannel().SetEnabled(true);
-      Patterns.GetChannel().SetNote(note);
-    }
-
-    void SetSample(uint_t sample) override
-    {
-      Patterns.GetChannel().SetSample(sample);
-    }
-
-    void SetVolume(uint_t volume) override
-    {
-      Patterns.GetChannel().SetVolume(volume);
-    }
-
-    void SetVolumeSlidePeriod(uint_t period) override
-    {
-      Patterns.GetChannel().AddCommand(VOLUME_SLIDE_PERIOD, period);
-    }
-
-    void SetVolumeSlideDirection(int_t direction) override
-    {
-      Patterns.GetChannel().AddCommand(VOLUME_SLIDE, direction);
-    }
-
-    ModuleData::Ptr CaptureResult()
-    {
-      Data->Patterns = Patterns.CaptureResult();
-      return std::move(Data);
-    }
-
   private:
     DAC::PropertiesHelper& Properties;
-    MetaProperties Meta;
-    PatternsBuilder Patterns;
-    ModuleData::RWPtr Data;
   };
 
   struct VolumeState
@@ -187,10 +150,10 @@ namespace Module::SQDigitalTracker
     {
       for (uint_t chan = 0; chan != CHANNELS_COUNT; ++chan)
       {
-        VolumeState& vol = Volumes[chan];
+        auto& vol = Volumes[chan];
         if (vol.Update())
         {
-          DAC::ChannelDataBuilder builder = track.GetChannel(chan);
+          auto builder = track.GetChannel(chan);
           builder.SetLevelInPercents(100 * vol.Value / 16);
         }
       }
@@ -238,7 +201,7 @@ namespace Module::SQDigitalTracker
           vol.SlideCounter = vol.SlidePeriod = cmd.Param1;
           break;
         case VOLUME_SLIDE:
-          vol.SlideDirection = cmd.Param1;
+          vol.SlideDirection = cmd.Param2;
           break;
         default:
           assert(!"Invalid command");

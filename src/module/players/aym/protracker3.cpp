@@ -17,9 +17,11 @@
 #include "module/players/aym/vortex.h"
 #include "module/players/properties_meta.h"
 #include "module/players/simple_orderlist.h"
+#include "module/players/track_builder.h"
 
 #include "parameters/tracking_helper.h"
 
+#include "make_ptr.h"
 #include "pointers.h"
 
 namespace Module::ProTracker3
@@ -28,19 +30,60 @@ namespace Module::ProTracker3
 
   const auto TURBOSOUND_COMMENT = "TurboSound module"sv;
 
-  class DataBuilder : public Formats::Chiptune::ProTracker3::Builder
+  class DataChannelBuilder : public TrackChannelBuilder<Formats::Chiptune::ProTracker3::ChannelBuilder>
+  {
+  public:
+    void SetGlissade(uint_t period, int_t val) override
+    {
+      GetCommands().AddOrReplace(Vortex::GLISS, int_t(period), val);
+    }
+    void SetNoteGliss(uint_t period, int_t val, uint_t /*limit*/) override
+    {
+      // ignore limit
+      GetCommands().AddOrReplace(Vortex::GLISS_NOTE, int_t(period), val);
+    }
+    void SetSampleOffset(uint_t offset) override
+    {
+      GetCommands().AddOrReplace(Vortex::SAMPLEOFFSET, offset);
+    }
+    void SetOrnamentOffset(uint_t offset) override
+    {
+      GetCommands().AddOrReplace(Vortex::ORNAMENTOFFSET, offset);
+    }
+    void SetVibrate(uint_t ontime, uint_t offtime) override
+    {
+      GetCommands().AddOrReplace(Vortex::VIBRATE, ontime, offtime);
+    }
+    void SetEnvelopeSlide(uint_t period, int_t val) override
+    {
+      GetCommands().AddOrReplace(Vortex::SLIDEENV, period, val);
+    }
+    void SetEnvelope(uint_t type, uint_t value) override
+    {
+      auto& commands = GetCommands();
+      commands.Remove(Vortex::ENVELOPE_OFF);
+      commands.AddOrReplace(Vortex::ENVELOPE, type, value);
+    }
+    void SetNoEnvelope() override
+    {
+      GetCommands().AddOrReplace(Vortex::ENVELOPE_OFF);
+    }
+    void SetNoiseBase(uint_t val) override
+    {
+      GetCommands().AddOrReplace(Vortex::NOISEBASE, val);
+    }
+  };
+
+  using LineBuilder = TrackLineBuilder<Formats::Chiptune::ProTracker3::ChannelBuilder, DataChannelBuilder>;
+  using PatternsBuilder = TrackPatternsBuilder<Formats::Chiptune::ProTracker3::ChannelBuilder, DataChannelBuilder>;
+
+  class DataBuilder : public TrackDataBuilder<Formats::Chiptune::ProTracker3::Builder, ModuleData, PatternsBuilder>
   {
   public:
     explicit DataBuilder(AYM::PropertiesHelper& props)
-      : Properties(props)
-      , Meta(props)
-      , Data(MakeRWPtr<ModuleData>())
+      : TrackDataBuilder(props)
+      , Properties(props)
     {}
-
-    Formats::Chiptune::MetaBuilder& GetMetaBuilder() override
-    {
-      return Meta;
-    }
 
     void SetVersion(uint_t version) override
     {
@@ -78,101 +121,8 @@ namespace Module::ProTracker3
       Data->Order = MakePtr<SimpleOrderList>(positions.Loop, std::move(positions.Lines));
     }
 
-    Formats::Chiptune::PatternBuilder& StartPattern(uint_t index) override
-    {
-      Patterns.SetPattern(index);
-      return Patterns;
-    }
-
-    void StartChannel(uint_t index) override
-    {
-      Patterns.SetChannel(index);
-    }
-
-    void SetRest() override
-    {
-      Patterns.GetChannel().SetEnabled(false);
-    }
-
-    void SetNote(uint_t note) override
-    {
-      MutableCell& channel = Patterns.GetChannel();
-      channel.SetEnabled(true);
-      channel.SetNote(note);
-    }
-
-    void SetSample(uint_t sample) override
-    {
-      Patterns.GetChannel().SetSample(sample);
-    }
-
-    void SetOrnament(uint_t ornament) override
-    {
-      Patterns.GetChannel().SetOrnament(ornament);
-    }
-
-    void SetVolume(uint_t vol) override
-    {
-      Patterns.GetChannel().SetVolume(vol);
-    }
-
-    void SetGlissade(uint_t period, int_t val) override
-    {
-      Patterns.GetChannel().AddCommand(Vortex::GLISS, period, val);
-    }
-
-    void SetNoteGliss(uint_t period, int_t val, uint_t /*limit*/) override
-    {
-      // ignore limit
-      Patterns.GetChannel().AddCommand(Vortex::GLISS_NOTE, period, val);
-    }
-
-    void SetSampleOffset(uint_t offset) override
-    {
-      Patterns.GetChannel().AddCommand(Vortex::SAMPLEOFFSET, offset);
-    }
-
-    void SetOrnamentOffset(uint_t offset) override
-    {
-      Patterns.GetChannel().AddCommand(Vortex::ORNAMENTOFFSET, offset);
-    }
-
-    void SetVibrate(uint_t ontime, uint_t offtime) override
-    {
-      Patterns.GetChannel().AddCommand(Vortex::VIBRATE, ontime, offtime);
-    }
-
-    void SetEnvelopeSlide(uint_t period, int_t val) override
-    {
-      Patterns.GetChannel().AddCommand(Vortex::SLIDEENV, period, val);
-    }
-
-    void SetEnvelope(uint_t type, uint_t value) override
-    {
-      Patterns.GetChannel().AddCommand(Vortex::ENVELOPE, type, value);
-    }
-
-    void SetNoEnvelope() override
-    {
-      Patterns.GetChannel().AddCommand(Vortex::NOENVELOPE);
-    }
-
-    void SetNoiseBase(uint_t val) override
-    {
-      Patterns.GetChannel().AddCommand(Vortex::NOISEBASE, val);
-    }
-
-    ModuleData::RWPtr CaptureResult()
-    {
-      Data->Patterns = Patterns.CaptureResult();
-      return std::move(Data);
-    }
-
   private:
     AYM::PropertiesHelper& Properties;
-    MetaProperties Meta;
-    PatternsBuilder Patterns;
-    ModuleData::RWPtr Data;
   };
 
   class Chiptune : public AYM::Chiptune

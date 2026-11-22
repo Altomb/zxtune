@@ -270,17 +270,19 @@ namespace Module::Vortex
           break;
         case ENVELOPE:
           track.SetEnvelopeType(cmd.Param1);
-          PlayerState.CommState.EnvBase = cmd.Param2;
+          PlayerState.CommState.EnvBase = static_cast<uint16_t>(cmd.Param2);
           dst.Envelope = true;
           PlayerState.CommState.EnvSlider.Reset();
           dst.PosInOrnament = 0;
           break;
-        case NOENVELOPE:
+        case ENVELOPE_OFF:
           dst.Envelope = false;
           dst.PosInOrnament = 0;
           break;
         case NOISEBASE:
           PlayerState.CommState.NoiseBase = cmd.Param1;
+          break;
+        default:
           break;
         }
       }

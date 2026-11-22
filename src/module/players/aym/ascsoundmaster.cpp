@@ -16,6 +16,7 @@
 #include "module/players/aym/aym_properties_helper.h"
 #include "module/players/properties_meta.h"
 #include "module/players/simple_orderlist.h"
+#include "module/players/track_builder.h"
 
 #include "binary/container.h"
 #include "math/numeric.h"
@@ -27,12 +28,11 @@
 
 namespace Module::ASCSoundMaster
 {
-  // supported commands and their parameters
+  // Supported commands and their parameters
+  // Presentation: distinct notation commands get distinct values; don't pack variants.
   enum CmdType
   {
-    // no parameters
-    EMPTY,
-    // r13,envL
+    // type, tone (-1 = unchanged)
     ENVELOPE,
     // no parameters
     ENVELOPE_ON,
@@ -44,7 +44,7 @@ namespace Module::ASCSoundMaster
     CONT_SAMPLE,
     // no parameters
     CONT_ORNAMENT,
-    // glissade value
+    // glissade
     GLISS,
     // steps
     SLIDE,
@@ -52,7 +52,7 @@ namespace Module::ASCSoundMaster
     SLIDE_NOTE,
     // period,delta
     AMPLITUDE_SLIDE,
-    // no parameter
+    // no parameters
     BREAK_SAMPLE
   };
 
@@ -61,20 +61,95 @@ namespace Module::ASCSoundMaster
 
   using ModuleData = AYM::ModuleData<OrderList, Sample, Ornament>;
 
-  class DataBuilder : public Formats::Chiptune::ASCSoundMaster::Builder
+  class DataChannelBuilder : public TrackChannelBuilder<Formats::Chiptune::ASCSoundMaster::ChannelBuilder>
+  {
+  public:
+    void SetNote(uint_t note) override
+    {
+      auto& chan = GetCell();
+      if (!chan.GetCommands().Find(BREAK_SAMPLE))
+      {
+        chan.SetEnabled(true);
+      }
+      chan.SetNote(note);
+    }
+    void SetEnvelopeType(uint_t type) override
+    {
+      auto& commands = GetCommands();
+      if (auto* cmd = commands.Find(ENVELOPE))
+      {
+        cmd->Param1 = type;
+      }
+      else
+      {
+        commands.Add(ENVELOPE, type, -1);
+      }
+    }
+    void SetEnvelopeTone(uint_t tone) override
+    {
+      auto& commands = GetCommands();
+      if (auto* cmd = commands.Find(ENVELOPE))
+      {
+        cmd->Param2 = tone;
+      }
+      else
+      {
+        commands.Add(ENVELOPE, 0xff, tone);
+      }
+    }
+    void SetEnvelope() override
+    {
+      GetCommands().AddOrReplace(ENVELOPE_ON);
+    }
+    void SetNoEnvelope() override
+    {
+      GetCommands().AddOrReplace(ENVELOPE_OFF);
+    }
+    void SetNoise(uint_t val) override
+    {
+      GetCommands().AddOrUpdate(NOISE, val);
+    }
+    void SetContinueSample() override
+    {
+      GetCommands().AddOrReplace(CONT_SAMPLE);
+    }
+    void SetContinueOrnament() override
+    {
+      GetCommands().AddOrReplace(CONT_ORNAMENT);
+    }
+    void SetGlissade(int_t val) override
+    {
+      GetCommands().AddOrReplace(GLISS, 0, val);
+    }
+    void SetSlide(int_t steps) override
+    {
+      GetCommands().Add(SLIDE, 0, steps);
+    }
+    void SetNoteSlide(int_t steps, bool useToneSliding) override
+    {
+      GetCommands().Add(SLIDE_NOTE, useToneSliding, steps);
+    }
+    void SetVolumeSlide(uint_t period, int_t delta) override
+    {
+      GetCommands().AddOrReplace(AMPLITUDE_SLIDE, period, delta);
+    }
+    void SetBreakSample() override
+    {
+      GetCommands().AddOrReplace(BREAK_SAMPLE);
+    }
+  };
+
+  using LineBuilder = TrackLineBuilder<Formats::Chiptune::ASCSoundMaster::ChannelBuilder, DataChannelBuilder>;
+  using PatternsBuilder = TrackPatternsBuilder<Formats::Chiptune::ASCSoundMaster::ChannelBuilder, DataChannelBuilder>;
+
+  class DataBuilder : public TrackDataBuilder<Formats::Chiptune::ASCSoundMaster::Builder, ModuleData, PatternsBuilder>
   {
   public:
     explicit DataBuilder(AYM::PropertiesHelper& props)
-      : Properties(props)
-      , Meta(props)
-      , Data(MakeRWPtr<ModuleData>())
+      : TrackDataBuilder(props)
+      , Properties(props)
     {
       Properties.SetFrequencyTable(AYM::TABLE_ASM);
-    }
-
-    Formats::Chiptune::MetaBuilder& GetMetaBuilder() override
-    {
-      return Meta;
     }
 
     void SetInitialTempo(uint_t tempo) override
@@ -97,132 +172,8 @@ namespace Module::ASCSoundMaster
       Data->Order = MakePtr<SimpleOrderList>(positions.Loop, std::move(positions.Lines));
     }
 
-    Formats::Chiptune::PatternBuilder& StartPattern(uint_t index) override
-    {
-      Patterns.SetPattern(index);
-      return Patterns;
-    }
-
-    void StartChannel(uint_t index) override
-    {
-      Patterns.SetChannel(index);
-    }
-
-    void SetRest() override
-    {
-      Patterns.GetChannel().SetEnabled(false);
-    }
-
-    void SetNote(uint_t note) override
-    {
-      if (!Patterns.GetChannel().FindCommand(BREAK_SAMPLE))
-      {
-        Patterns.GetChannel().SetEnabled(true);
-      }
-      Patterns.GetChannel().SetNote(note);
-    }
-
-    void SetSample(uint_t sample) override
-    {
-      Patterns.GetChannel().SetSample(sample);
-    }
-
-    void SetOrnament(uint_t ornament) override
-    {
-      Patterns.GetChannel().SetOrnament(ornament);
-    }
-
-    void SetVolume(uint_t vol) override
-    {
-      Patterns.GetChannel().SetVolume(vol);
-    }
-
-    void SetEnvelopeType(uint_t type) override
-    {
-      if (Command* cmd = Patterns.GetChannel().FindCommand(ENVELOPE))
-      {
-        cmd->Param1 = int_t(type);
-      }
-      else
-      {
-        Patterns.GetChannel().AddCommand(ENVELOPE, int_t(type), -1);
-      }
-    }
-
-    void SetEnvelopeTone(uint_t tone) override
-    {
-      if (Command* cmd = Patterns.GetChannel().FindCommand(ENVELOPE))
-      {
-        cmd->Param2 = int_t(tone);
-      }
-      else
-      {
-        // strange situation
-        Patterns.GetChannel().AddCommand(ENVELOPE, -1, int_t(tone));
-      }
-    }
-
-    void SetEnvelope() override
-    {
-      Patterns.GetChannel().AddCommand(ENVELOPE_ON);
-    }
-
-    void SetNoEnvelope() override
-    {
-      Patterns.GetChannel().AddCommand(ENVELOPE_OFF);
-    }
-
-    void SetNoise(uint_t val) override
-    {
-      Patterns.GetChannel().AddCommand(NOISE, val);
-    }
-
-    void SetContinueSample() override
-    {
-      Patterns.GetChannel().AddCommand(CONT_SAMPLE);
-    }
-
-    void SetContinueOrnament() override
-    {
-      Patterns.GetChannel().AddCommand(CONT_ORNAMENT);
-    }
-
-    void SetGlissade(int_t val) override
-    {
-      Patterns.GetChannel().AddCommand(GLISS, val);
-    }
-
-    void SetSlide(int_t steps) override
-    {
-      Patterns.GetChannel().AddCommand(SLIDE, steps);
-    }
-
-    void SetNoteSlide(int_t steps, bool useToneSliding) override
-    {
-      Patterns.GetChannel().AddCommand(SLIDE_NOTE, steps, useToneSliding);
-    }
-
-    void SetVolumeSlide(uint_t period, int_t delta) override
-    {
-      Patterns.GetChannel().AddCommand(AMPLITUDE_SLIDE, period, delta);
-    }
-
-    void SetBreakSample() override
-    {
-      Patterns.GetChannel().AddCommand(BREAK_SAMPLE);
-    }
-
-    ModuleData::Ptr CaptureResult()
-    {
-      Data->Patterns = Patterns.CaptureResult();
-      return std::move(Data);
-    }
-
   private:
     AYM::PropertiesHelper& Properties;
-    MetaProperties Meta;
-    PatternsBuilder Patterns;
-    ModuleData::RWPtr Data;
   };
 
   class ToneSlider
@@ -359,7 +310,8 @@ namespace Module::ASCSoundMaster
         switch (cmd.Type)
         {
         case ENVELOPE:
-          if (-1 != cmd.Param1)
+          // type is 4-bit, so 0xff is a safe "unchanged" marker
+          if (0xff != cmd.Param1)
           {
             track.SetEnvelopeType(cmd.Param1);
           }
@@ -385,17 +337,17 @@ namespace Module::ASCSoundMaster
           contOrnament = true;
           break;
         case GLISS:
-          dst.ToneSlide.SetGlissade(cmd.Param1);
+          dst.ToneSlide.SetGlissade(cmd.Param2);
           break;
         case SLIDE:
-          dst.ToneSlide.SetSlide(cmd.Param1, dst.ToneSlide.GetSliding() / 16 * 16);
+          dst.ToneSlide.SetSlide(cmd.Param2, dst.ToneSlide.GetSliding() / 16 * 16);
           break;
         case SLIDE_NOTE:
         {
           const int_t currentSliding = dst.ToneSlide.GetSliding() / 16 * 16;
-          const int_t toneSliding = cmd.Param2 ? currentSliding : 0;
+          const int_t toneSliding = cmd.Param1 ? currentSliding : 0;
           const int_t range = note ? -16 * track.GetSlidingDifference(dst.Note, *note) + toneSliding : currentSliding;
-          dst.ToneSlide.SetSlide(cmd.Param1, range);
+          dst.ToneSlide.SetSlide(cmd.Param2, range);
           break;
         }
         case AMPLITUDE_SLIDE:
@@ -406,7 +358,6 @@ namespace Module::ASCSoundMaster
           dst.BreakSample = true;
           break;
         default:
-          assert(!"Invalid cmd");
           break;
         }
       }

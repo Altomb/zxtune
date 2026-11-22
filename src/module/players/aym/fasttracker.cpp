@@ -16,6 +16,7 @@
 #include "module/players/aym/aym_properties_helper.h"
 #include "module/players/properties_meta.h"
 #include "module/players/simple_orderlist.h"
+#include "module/players/track_builder.h"
 
 #include "binary/container.h"
 #include "math/numeric.h"
@@ -27,16 +28,15 @@
 
 namespace Module::FastTracker
 {
-  // supported commands and their parameters
+  // per-channel commands and their parameters
+  // Presentation: distinct notation commands get distinct values; don't pack variants.
   enum CmdType
   {
-    // no parameters
-    EMPTY,
-    // r13,tone
+    // type, tone
     ENVELOPE,
     // no parameters
     ENVELOPE_OFF,
-    // r5
+    // value
     NOISE,
     // no parameters
     RETRIG,
@@ -52,19 +52,50 @@ namespace Module::FastTracker
   using OrderListWithTransposition = SimpleOrderListWithTransposition<Formats::Chiptune::FastTracker::PositionEntry>;
   using ModuleData = AYM::ModuleData<OrderListWithTransposition, Sample, Ornament>;
 
-  class DataBuilder : public Formats::Chiptune::FastTracker::Builder
+  class DataChannelBuilder : public TrackChannelBuilder<Formats::Chiptune::FastTracker::ChannelBuilder>
+  {
+  public:
+    void SetEnvelope(uint_t type, uint_t tone) override
+    {
+      GetCommands().AddOrReplace(ENVELOPE, type, tone);
+    }
+
+    void SetNoEnvelope() override
+    {
+      GetCommands().AddOrReplace(ENVELOPE_OFF);
+    }
+
+    void SetNoise(uint_t val) override
+    {
+      GetCommands().AddOrUpdate(NOISE, val);
+    }
+
+    void SetRetrig() override
+    {
+      GetCommands().AddOrReplace(RETRIG);
+    }
+
+    void SetSlide(int_t step) override
+    {
+      GetCommands().AddOrReplace(SLIDE, 0, step);
+    }
+
+    void SetNoteSlide(uint_t step) override
+    {
+      GetCommands().Add(SLIDE_NOTE, step);
+    }
+  };
+
+  using LineBuilder = TrackLineBuilder<Formats::Chiptune::FastTracker::ChannelBuilder, DataChannelBuilder>;
+  using PatternsBuilder = TrackPatternsBuilder<Formats::Chiptune::FastTracker::ChannelBuilder, DataChannelBuilder>;
+
+  class DataBuilder : public TrackDataBuilder<Formats::Chiptune::FastTracker::Builder, ModuleData, PatternsBuilder>
   {
   public:
     explicit DataBuilder(AYM::PropertiesHelper& props)
-      : Properties(props)
-      , Meta(props)
-      , Data(MakeRWPtr<ModuleData>())
+      : TrackDataBuilder(props)
+      , Properties(props)
     {}
-
-    Formats::Chiptune::MetaBuilder& GetMetaBuilder() override
-    {
-      return Meta;
-    }
 
     void SetNoteTable(Formats::Chiptune::FastTracker::NoteTable table) override
     {
@@ -102,85 +133,8 @@ namespace Module::FastTracker
       Data->Order = MakePtr<OrderListWithTransposition>(positions.Loop, std::move(positions.Lines));
     }
 
-    Formats::Chiptune::PatternBuilder& StartPattern(uint_t index) override
-    {
-      Patterns.SetPattern(index);
-      return Patterns;
-    }
-
-    void StartChannel(uint_t index) override
-    {
-      Patterns.SetChannel(index);
-    }
-
-    void SetRest() override
-    {
-      Patterns.GetChannel().SetEnabled(false);
-    }
-
-    void SetNote(uint_t note) override
-    {
-      MutableCell& channel = Patterns.GetChannel();
-      channel.SetEnabled(true);
-      channel.SetNote(note);
-    }
-
-    void SetSample(uint_t sample) override
-    {
-      Patterns.GetChannel().SetSample(sample);
-    }
-
-    void SetOrnament(uint_t ornament) override
-    {
-      Patterns.GetChannel().SetOrnament(ornament);
-    }
-
-    void SetVolume(uint_t vol) override
-    {
-      Patterns.GetChannel().SetVolume(vol);
-    }
-
-    void SetEnvelope(uint_t type, uint_t tone) override
-    {
-      Patterns.GetChannel().AddCommand(ENVELOPE, int_t(type), int_t(tone));
-    }
-
-    void SetNoEnvelope() override
-    {
-      Patterns.GetChannel().AddCommand(ENVELOPE_OFF);
-    }
-
-    void SetNoise(uint_t val) override
-    {
-      Patterns.GetChannel().AddCommand(NOISE, val);
-    }
-
-    void SetRetrig() override
-    {
-      Patterns.GetChannel().AddCommand(RETRIG);
-    }
-
-    void SetSlide(int_t step) override
-    {
-      Patterns.GetChannel().AddCommand(SLIDE, step);
-    }
-
-    void SetNoteSlide(uint_t step) override
-    {
-      Patterns.GetChannel().AddCommand(SLIDE_NOTE, int_t(step));
-    }
-
-    ModuleData::Ptr CaptureResult()
-    {
-      Data->Patterns = Patterns.CaptureResult();
-      return std::move(Data);
-    }
-
   private:
     AYM::PropertiesHelper& Properties;
-    MetaProperties Meta;
-    PatternsBuilder Patterns;
-    ModuleData::RWPtr Data;
   };
 
   template<class Object>
@@ -414,7 +368,7 @@ namespace Module::FastTracker
         case ENVELOPE:
           EnvelopeType = cmd.Param1;
           EnvelopeDirty = true;
-          dst.Envelope = cmd.Param2;
+          dst.Envelope = static_cast<uint16_t>(cmd.Param2);
           dst.EnvelopeEnabled = true;
           break;
         case ENVELOPE_OFF:
@@ -429,7 +383,7 @@ namespace Module::FastTracker
           EnvelopeDirty = true;
           break;
         case SLIDE:
-          dst.ToneSlide.SetGlissade(cmd.Param1);
+          dst.ToneSlide.SetGlissade(cmd.Param2);
           break;
         case SLIDE_NOTE:
         {
@@ -441,6 +395,8 @@ namespace Module::FastTracker
           dst.ToneSlide.SetSlideDirection(direction);
         }
         break;
+        default:
+          break;
         }
       }
     }

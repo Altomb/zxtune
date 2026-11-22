@@ -16,6 +16,7 @@
 #include "module/players/aym/aym_properties_helper.h"
 #include "module/players/properties_meta.h"
 #include "module/players/simple_orderlist.h"
+#include "module/players/track_builder.h"
 
 #include "binary/container.h"
 #include "math/numeric.h"
@@ -29,16 +30,17 @@
 
 namespace Module::ProSoundMaker
 {
-  // supported commands and parameters
+  // per-channel commands and their parameters
+  // Presentation: distinct notation commands get distinct values; don't pack variants.
   enum CmdType
   {
-    // no parameters
-    EMPTY,
-    // r13,period,note delta
+    // type, tone
     ENVELOPE,
-    // disable ornament
+    // type, note
+    ENVELOPE_NOTE,
+    // no parameters
     NOORNAMENT,
-    // envelope reinit on every note,true/false
+    // enabled
     ENVELOPE_REINIT
   };
 
@@ -49,20 +51,42 @@ namespace Module::ProSoundMaker
 
   using ModuleData = AYM::ModuleData<OrderListWithTransposition, Sample, Ornament>;
 
-  class DataBuilder : public Formats::Chiptune::ProSoundMaker::Builder
+  class DataChannelBuilder : public TrackChannelBuilder<Formats::Chiptune::ProSoundMaker::ChannelBuilder>
+  {
+  public:
+    void DisableOrnament() override
+    {
+      GetCommands().AddOrReplace(NOORNAMENT);
+    }
+    void SetEnvelopeReinit(bool enabled) override
+    {
+      GetCommands().AddOrReplace(ENVELOPE_REINIT, enabled);
+    }
+    void SetEnvelopeTone(uint_t type, uint_t tone) override
+    {
+      auto& channel = GetCell();
+      Require(!channel.GetCommands().Find(ENVELOPE) && !channel.GetCommands().Find(ENVELOPE_NOTE));
+      channel.GetCommands().Add(ENVELOPE, int_t(type), int_t(tone));
+    }
+    void SetEnvelopeNote(uint_t type, uint_t note) override
+    {
+      auto& channel = GetCell();
+      Require(!channel.GetCommands().Find(ENVELOPE) && !channel.GetCommands().Find(ENVELOPE_NOTE));
+      channel.GetCommands().Add(ENVELOPE_NOTE, int_t(type), int_t(note));
+    }
+  };
+
+  using LineBuilder = TrackLineBuilder<Formats::Chiptune::ProSoundMaker::ChannelBuilder, DataChannelBuilder>;
+  using PatternsBuilder = TrackPatternsBuilder<Formats::Chiptune::ProSoundMaker::ChannelBuilder, DataChannelBuilder>;
+
+  class DataBuilder : public TrackDataBuilder<Formats::Chiptune::ProSoundMaker::Builder, ModuleData, PatternsBuilder>
   {
   public:
     explicit DataBuilder(AYM::PropertiesHelper& props)
-      : Properties(props)
-      , Meta(props)
-      , Data(MakeRWPtr<ModuleData>())
+      : TrackDataBuilder(props)
+      , Properties(props)
     {
       Properties.SetFrequencyTable(AYM::TABLE_PROSOUNDMAKER);
-    }
-
-    Formats::Chiptune::MetaBuilder& GetMetaBuilder() override
-    {
-      return Meta;
     }
 
     void SetSample(uint_t index, Formats::Chiptune::ProSoundMaker::Sample sample) override
@@ -80,78 +104,8 @@ namespace Module::ProSoundMaker
       Data->Order = MakePtr<OrderListWithTransposition>(positions.Loop, std::move(positions.Lines));
     }
 
-    Formats::Chiptune::PatternBuilder& StartPattern(uint_t index) override
-    {
-      Patterns.SetPattern(index);
-      return Patterns;
-    }
-
-    void StartChannel(uint_t index) override
-    {
-      Patterns.SetChannel(index);
-    }
-
-    void SetRest() override
-    {
-      Patterns.GetChannel().SetEnabled(false);
-    }
-
-    void SetNote(uint_t note) override
-    {
-      Patterns.GetChannel().SetEnabled(true);
-      Patterns.GetChannel().SetNote(note);
-    }
-
-    void SetSample(uint_t sample) override
-    {
-      Patterns.GetChannel().SetSample(sample);
-    }
-
-    void SetOrnament(uint_t ornament) override
-    {
-      Patterns.GetChannel().SetOrnament(ornament);
-    }
-
-    void SetVolume(uint_t volume) override
-    {
-      Patterns.GetChannel().SetVolume(volume);
-    }
-
-    void DisableOrnament() override
-    {
-      Patterns.GetChannel().AddCommand(NOORNAMENT);
-    }
-
-    void SetEnvelopeReinit(bool enabled) override
-    {
-      Patterns.GetChannel().AddCommand(ENVELOPE_REINIT, enabled);
-    }
-
-    void SetEnvelopeTone(uint_t type, uint_t tone) override
-    {
-      MutableCell& channel = Patterns.GetChannel();
-      Require(!channel.FindCommand(ENVELOPE));
-      channel.AddCommand(ENVELOPE, int_t(type), int_t(tone), -1);
-    }
-
-    void SetEnvelopeNote(uint_t type, uint_t note) override
-    {
-      MutableCell& channel = Patterns.GetChannel();
-      Require(!channel.FindCommand(ENVELOPE));
-      channel.AddCommand(ENVELOPE, int_t(type), -1, int_t(note));
-    }
-
-    ModuleData::Ptr CaptureResult()
-    {
-      Data->Patterns = Patterns.CaptureResult();
-      return std::move(Data);
-    }
-
   private:
     AYM::PropertiesHelper& Properties;
-    MetaProperties Meta;
-    PatternsBuilder Patterns;
-    ModuleData::RWPtr Data;
   };
 
   struct SampleState
@@ -296,16 +250,13 @@ namespace Module::ProSoundMaker
         {
         case ENVELOPE:
           dst.Envelope.Type = cmd.Param1;
-          if (cmd.Param2 != -1)
-          {
-            track.SetEnvelopeType(cmd.Param1);
-            track.SetEnvelopeTone(cmd.Param2);
-            dst.Envelope.SetTone(cmd.Param2);
-          }
-          else if (cmd.Param3 != -1)
-          {
-            dst.Envelope.SetNote(cmd.Param3);
-          }
+          track.SetEnvelopeType(cmd.Param1);
+          track.SetEnvelopeTone(cmd.Param2);
+          dst.Envelope.SetTone(cmd.Param2);
+          break;
+        case ENVELOPE_NOTE:
+          dst.Envelope.Type = cmd.Param1;
+          dst.Envelope.SetNote(cmd.Param2);
           break;
         case NOORNAMENT:
           dst.Orn.Finished = dst.Orn.KeepFinished = true;
@@ -317,7 +268,7 @@ namespace Module::ProSoundMaker
           dst.Orn.Current = &STUB;
           break;
         default:
-          assert(!"Invalid command");
+          break;
         }
       }
       if (const uint_t* note = src.GetNote())
