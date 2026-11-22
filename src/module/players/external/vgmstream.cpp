@@ -33,6 +33,7 @@
 #include "string_view.h"
 
 #include <algorithm>
+#include <mutex>
 #include <utility>
 
 extern "C"
@@ -48,6 +49,13 @@ extern "C"
 namespace Module::VGMStream
 {
   const Debug::Stream Dbg("Module::VGMStream");
+
+  // vgmstream probes for optional companion metadata files while parsing.
+  // Their absence should not be treated as unresolved dependency.
+  bool IsOptionalDependency(StringView name)
+  {
+    return name.ends_with(".txth"sv) || name.ends_with(".txtm"sv);
+  }
 
   class Vfs
   {
@@ -76,7 +84,7 @@ namespace Module::VGMStream
       else
       {
         Dbg("Not found {}", name);
-        if (it == Content.end())
+        if (it == Content.end() && !IsOptionalDependency(name))
         {
           Content.emplace_back(name, Binary::Data::Ptr());
         }
@@ -419,17 +427,23 @@ namespace Module::VGMStream
 
     Information GetModuleInformation() const override
     {
-      return GetDelegate().GetModuleInformation();
+      // Metadata may be requested before all the additional files are resolved
+      // (e.g. during file scanning), so do not fail in this case.
+      return TryGetDelegate() ? Delegate->GetModuleInformation() : Information();
     }
 
     Parameters::Accessor::Ptr GetModuleProperties() const override
     {
-      return GetDelegate().GetModuleProperties();
+      return TryGetDelegate() ? Delegate->GetModuleProperties() : Properties;
     }
 
     Renderer::Ptr CreateRenderer(uint_t samplerate, Parameters::Accessor::Ptr params) const override
     {
-      return GetDelegate().CreateRenderer(samplerate, std::move(params));
+      if (const auto delegate = TryGetDelegate())
+      {
+        return delegate->CreateRenderer(samplerate, std::move(params));
+      }
+      throw Error(THIS_LINE, "vgmstream multifile module is not ready");
     }
 
     Strings::Array Enumerate() const override
@@ -440,33 +454,38 @@ namespace Module::VGMStream
     void Resolve(StringView name, Binary::Container::Ptr data) override
     {
       Dbg("Resolving dependency '{}'", name);
+      const std::lock_guard<std::mutex> lock(Mutex);
       Model->Resolve(name, std::move(data));
       TryCreateDelegate();
     }
 
   private:
-    const Module::Holder& GetDelegate() const
+    Ptr TryGetDelegate() const
     {
-      if (!Delegate)
-      {
-        TryCreateDelegate();
-      }
-      return *Delegate;
+      const std::lock_guard<std::mutex> lock(Mutex);
+      TryCreateDelegate();
+      return Delegate;
     }
 
     void TryCreateDelegate() const
     {
+      if (Delegate || Model->HasUnresolved())
+      {
+        return;
+      }
       Delegate = TryCreateModule(Model, Properties);
       if (Delegate)
       {
+        // Module is functional, so the rest of unresolved files (if any) are optional
+        Model->ClearUnresolved();
         Dbg("All dependencies resolved");
-        Model->ClearUnresolved();  // for any
       }
     }
 
   private:
     const Vfs::Ptr Model;
     const Parameters::Container::Ptr Properties;
+    mutable std::mutex Mutex;
     mutable Ptr Delegate;
   };
 
