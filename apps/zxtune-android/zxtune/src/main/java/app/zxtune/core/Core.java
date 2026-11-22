@@ -215,7 +215,7 @@ public class Core {
       if (!files.containsKey(name)) {
         final int lastSeparator = name.lastIndexOf('/');
         if (lastSeparator != -1) {
-          preloadDir(name.substring(0, lastSeparator - 1));
+          preloadDir(name.substring(0, lastSeparator));
         }
       }
       return files.get(name);
@@ -225,7 +225,7 @@ public class Core {
       if (!dirs.containsKey(path)) {
         final int lastSeparator = path.lastIndexOf('/');
         if (lastSeparator != -1) {
-          preloadDir(path.substring(0, lastSeparator - 1));
+          preloadDir(path.substring(0, lastSeparator));
         }
       }
       final VfsDir dir = dirs.get(path);
