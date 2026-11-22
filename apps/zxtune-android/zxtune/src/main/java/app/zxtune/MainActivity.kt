@@ -28,7 +28,8 @@ import app.zxtune.ui.ViewPagerAdapter
 import app.zxtune.ui.utils.applyEdgeToEdge
 import app.zxtune.ui.utils.padWithSystemBars
 import app.zxtune.ui.utils.whenLifecycleStarted
-import kotlinx.coroutines.flow.last
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity(R.layout.main_activity) {
@@ -79,7 +80,7 @@ class MainActivity : AppCompatActivity(R.layout.main_activity) {
 
         intent?.takeIf { Intent.ACTION_VIEW == it.action }?.data?.let { uri ->
             lifecycleScope.launch {
-                ctrl.last()?.transportControls?.playFromUri(uri, null)
+                ctrl.filterNotNull().first().transportControls?.playFromUri(uri, null)
             }
         }
     }
