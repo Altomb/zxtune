@@ -336,10 +336,23 @@ public class PlaybackServiceLocal implements PlaybackService, Releaseable {
 
     @Override
     public void execute() {
-      final Iterator iteratorCopy = iterator.get();
-      if (performNavigation(iteratorCopy) && iterator.compareAndSet(iteratorCopy, iteratorCopy)) {
-        setNewItem(iteratorCopy.getItem());
-        player.startPlayback();
+      Log.d(TAG, "NavigateCommand.execute canceled=%s counter=%d", canceled.get(), counter.get());
+      boolean completed = false;
+      try {
+        final Iterator iteratorCopy = iterator.get();
+        if (performNavigation(iteratorCopy) && iterator.compareAndSet(iteratorCopy, iteratorCopy)) {
+          setNewItem(iteratorCopy.getItem());
+          player.startPlayback();
+        }
+        completed = true;
+      } finally {
+        // scheduleNext/Prev only start a command while the counter transitions from 0: an
+        // abandoned attempt must drop the counter, or both skip directions stay silent
+        // forever
+        if (!completed) {
+          counter.set(0);
+          Log.d(TAG, "NavigateCommand aborted, counter reset");
+        }
       }
     }
 
